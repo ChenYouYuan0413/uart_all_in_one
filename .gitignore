@@ -1,0 +1,4 @@
+.claude/
+.vscode/
+serial_debug_open/
+build/

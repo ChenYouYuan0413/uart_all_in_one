@@ -1,0 +1,330 @@
+{
+  "window_geometry": [
+    506,
+    209,
+    1182,
+    1000
+  ],
+  "theme": "暗色主题",
+  "serial_port": "COM21",
+  "baudrate": "115200",
+  "databits": "8",
+  "stopbits": "1",
+  "parity": "无",
+  "encoding": "GBK",
+  "send_encoding": "GBK",
+  "send_mode": "ASCII",
+  "recv_mode": "HEX",
+  "auto_scroll": true,
+  "auto_parse": true,
+  "show_config": true,
+  "show_send": false,
+  "show_recv": true,
+  "show_terminal": false,
+  "show_debug": false,
+  "show_parse": true,
+  "show_oscillo": false,
+  "protocols_loaded": [
+    {
+      "name": "struct_definition.json",
+      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples/struct_definition.json",
+      "data": {
+        "structName": "CAR_Packet",
+        "fields": [
+          {
+            "name": "STOP_FLAG",
+            "type": "uint8"
+          },
+          {
+            "name": "VX",
+            "type": "int16"
+          },
+          {
+            "name": "VY",
+            "type": "int16"
+          },
+          {
+            "name": "VZ",
+            "type": "int16"
+          },
+          {
+            "name": "XA",
+            "type": "int16"
+          },
+          {
+            "name": "YA",
+            "type": "int16"
+          },
+          {
+            "name": "ZA",
+            "type": "int16"
+          },
+          {
+            "name": "X_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Y_angel",
+            "type": "int16"
+          },
+          {
+            "name": "Z_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Votage",
+            "type": "uint16"
+          }
+        ],
+        "verify": "xor",
+        "align": 1,
+        "header": 123,
+        "header_len": 1,
+        "footer": 125,
+        "footer_len": 1,
+        "data_len": false
+      }
+    },
+    {
+      "name": "CAR_Packet.json",
+      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples\\CAR_Packet.json",
+      "data": {
+        "structName": "CAR_Packet",
+        "fields": [
+          {
+            "name": "STOP_FLAG",
+            "type": "uint8"
+          },
+          {
+            "name": "VX",
+            "type": "int16"
+          },
+          {
+            "name": "VY",
+            "type": "int16"
+          },
+          {
+            "name": "VZ",
+            "type": "int16"
+          },
+          {
+            "name": "XA",
+            "type": "int16"
+          },
+          {
+            "name": "YA",
+            "type": "int16"
+          },
+          {
+            "name": "ZA",
+            "type": "int16"
+          },
+          {
+            "name": "X_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Y_angel",
+            "type": "int16"
+          },
+          {
+            "name": "Z_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Votage",
+            "type": "uint16"
+          }
+        ],
+        "verify": "xor",
+        "align": 1,
+        "header": 123,
+        "header_len": 1,
+        "footer": 125,
+        "footer_len": 1,
+        "data_len": false
+      }
+    },
+    {
+      "name": "CAR_Packet_1.json",
+      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples\\CAR_Packet_1.json",
+      "data": {
+        "structName": "CAR_Packet_1",
+        "fields": [
+          {
+            "name": "STOP_FLAG",
+            "type": "uint8"
+          },
+          {
+            "name": "EEE",
+            "type": "int16"
+          },
+          {
+            "name": "VY",
+            "type": "int16"
+          },
+          {
+            "name": "VZ",
+            "type": "int16"
+          },
+          {
+            "name": "XA",
+            "type": "int16"
+          },
+          {
+            "name": "YA",
+            "type": "int16"
+          },
+          {
+            "name": "ZA",
+            "type": "int16"
+          },
+          {
+            "name": "X_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Y_angel",
+            "type": "int16"
+          },
+          {
+            "name": "Z_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Votage",
+            "type": "uint16"
+          }
+        ],
+        "verify": "xor",
+        "align": 1,
+        "header": 123,
+        "header_len": 1,
+        "footer": 125,
+        "footer_len": 1,
+        "data_len": false
+      }
+    },
+    {
+      "name": "struct_definition.json",
+      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples\\struct_definition.json",
+      "data": {
+        "structName": "CAR_Packet",
+        "fields": [
+          {
+            "name": "STOP_FLAG",
+            "type": "uint8"
+          },
+          {
+            "name": "VX",
+            "type": "int16"
+          },
+          {
+            "name": "VY",
+            "type": "int16"
+          },
+          {
+            "name": "VZ",
+            "type": "int16"
+          },
+          {
+            "name": "XA",
+            "type": "int16"
+          },
+          {
+            "name": "YA",
+            "type": "int16"
+          },
+          {
+            "name": "ZA",
+            "type": "int16"
+          },
+          {
+            "name": "X_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Y_angel",
+            "type": "int16"
+          },
+          {
+            "name": "Z_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Votage",
+            "type": "uint16"
+          }
+        ],
+        "verify": "xor",
+        "align": 1,
+        "header": 123,
+        "header_len": 1,
+        "footer": 125,
+        "footer_len": 1,
+        "data_len": false
+      }
+    },
+    {
+      "name": "CAR_Packet",
+      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples/CAR_Packet.json",
+      "data": {
+        "structName": "CAR_Packet",
+        "fields": [
+          {
+            "name": "STOP_FLAG",
+            "type": "uint8"
+          },
+          {
+            "name": "VX",
+            "type": "int16"
+          },
+          {
+            "name": "VY",
+            "type": "int16"
+          },
+          {
+            "name": "VZ",
+            "type": "int16"
+          },
+          {
+            "name": "XA",
+            "type": "int16"
+          },
+          {
+            "name": "YA",
+            "type": "int16"
+          },
+          {
+            "name": "ZA",
+            "type": "int16"
+          },
+          {
+            "name": "X_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Y_angel",
+            "type": "int16"
+          },
+          {
+            "name": "Z_angle",
+            "type": "int16"
+          },
+          {
+            "name": "Votage",
+            "type": "uint16"
+          }
+        ],
+        "verify": "xor",
+        "align": 1,
+        "header": 123,
+        "header_len": 1,
+        "footer": 125,
+        "footer_len": 1,
+        "data_len": false
+      }
+    }
+  ],
+  "debug_protocols_loaded": []
+}

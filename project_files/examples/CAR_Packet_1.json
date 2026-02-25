@@ -1,0 +1,56 @@
+{
+  "structName": "CAR_Packet_1",
+  "fields": [
+    {
+      "name": "STOP_FLAG",
+      "type": "uint8"
+    },
+    {
+      "name": "EEE",
+      "type": "int16"
+    },
+    {
+      "name": "VY",
+      "type": "int16"
+    },
+    {
+      "name": "VZ",
+      "type": "int16"
+    },
+    {
+      "name": "XA",
+      "type": "int16"
+    },
+    {
+      "name": "YA",
+      "type": "int16"
+    },
+    {
+      "name": "ZA",
+      "type": "int16"
+    },
+    {
+      "name": "X_angle",
+      "type": "int16"
+    },
+    {
+      "name": "Y_angel",
+      "type": "int16"
+    },
+    {
+      "name": "Z_angle",
+      "type": "int16"
+    },
+    {
+      "name": "Votage",
+      "type": "uint16"
+    }
+  ],
+  "verify": "xor",
+  "align": 1,
+  "header": 123,
+  "header_len": 1,
+  "footer": 125,
+  "footer_len": 1,
+  "data_len": false
+}
