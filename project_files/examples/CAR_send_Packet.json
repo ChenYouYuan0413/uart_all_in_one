@@ -1,0 +1,34 @@
+{
+  "structName": "CAR_send_Packet",
+  "fields": [
+    {
+      "name": "SAVE_FLAG",
+      "type": "uint16"
+    },
+    {
+      "name": "VX",
+      "type": "int16"
+    },
+    {
+      "name": "VY",
+      "type": "int16"
+    },
+    {
+      "name": "VZ",
+      "type": "int16"
+    }
+  ],
+  "endian": "big",
+  "verify": "xor",
+  "align": 1,
+  "header": 123,
+  "header_len": 1,
+  "footer": 125,
+  "footer_len": 1,
+  "data_len": false,
+  "data_len_mode": "full_frame",
+  "data_len_include_header": false,
+  "data_len_include_footer": false,
+  "data_len_include_checksum": false,
+  "checksum_range": "full_frame"
+}

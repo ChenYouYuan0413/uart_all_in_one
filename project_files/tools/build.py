@@ -30,6 +30,9 @@ MODULES_DIR = os.path.join(BUILD_SCRIPT_DIR, 'modules')
 # Logo 目录
 LOGO_DIR = os.path.join(BUILD_SCRIPT_DIR, 'logo')
 
+# Config 文件
+CONFIG_FILE = os.path.join(PROJECT_ROOT, 'project_files', 'config.json')
+
 
 def check_dependencies():
     """检查必要的依赖"""
@@ -67,8 +70,10 @@ def build_exe(platform=None):
         '--windowed',         # Windows 下不显示控制台
         '--name=UartTool',    # 输出文件名
         f'--add-data={EXAMPLES_DIR}{sep}project_files/examples',  # 添加示例文件
+        f'--add-data={EXAMPLES_DIR}{sep}examples',  # 添加示例文件到根目录
         f'--add-data={MODULES_DIR}{sep}tools/modules',  # 添加 modules 目录
         f'--add-data={LOGO_DIR}{sep}tools/logo',  # 添加 logo 目录
+        f'--add-data={CONFIG_FILE}{sep}project_files/config.json',  # 添加配置文件
         '--hidden-import=PyQt5',
         '--hidden-import=PyQt5.QtCore',
         '--hidden-import=PyQt5.QtGui',
@@ -82,6 +87,10 @@ def build_exe(platform=None):
         '--hidden-import=modules.oscilloscope',
         '--hidden-import=modules.terminal',
         '--hidden-import=modules.protocol_window',
+        '--hidden-import=modules.theme_utils',
+        '--hidden-import=logging',
+        '--hidden-import=json',
+        '--hidden-import=functools',
     ]
 
     # 添加图标（如果存在）

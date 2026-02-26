@@ -4,6 +4,7 @@
 import sys
 import os
 import json
+import glob
 from functools import partial
 import subprocess
 import shutil
@@ -17,7 +18,7 @@ log = logging.getLogger('qt_json_editor')
 try:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-        QTableWidget, QTableWidgetItem, QPushButton, QComboBox, QSpinBox, QFileDialog, QMessageBox, QCheckBox, QSizePolicy,
+        QTableWidget, QTableWidgetItem, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QFileDialog, QMessageBox, QCheckBox, QSizePolicy,
         QTabWidget, QTextEdit, QGroupBox, QGridLayout, QButtonGroup, QRadioButton, QToolBar, QScrollArea, QDialog, QListWidget, QAbstractItemView, QHeaderView,
         QSplitter
     )
@@ -48,27 +49,81 @@ TYPES = ['int', 'uint8', 'uint16', 'int8', 'int16', 'float', 'char', 'bool']
 def default_json_path():
     """默认JSON文件路径 - 支持开发和打包后的exe"""
     base = get_app_dir()
-    return os.path.join(base, 'examples', 'struct_definition.json')
+
+    # 打包后的目录结构：exe同级的examples文件夹
+    # 开发环境：项目根目录的examples文件夹
+    import sys
+    if getattr(sys, 'frozen', False):
+        # 打包后：exe同级的examples/example.json
+        example_path = os.path.join(os.path.dirname(sys.executable), 'examples', 'example.json')
+        struct_path = os.path.join(os.path.dirname(sys.executable), 'examples', 'struct_definition.json')
+    else:
+        # 开发环境：项目根目录的examples/example.json
+        example_path = os.path.join(base, 'examples', 'example.json')
+        struct_path = os.path.join(base, 'project_files', 'examples', 'struct_definition.json')
+
+    # 优先查找 example.json
+    if os.path.exists(example_path):
+        return example_path
+    # 其次查找 struct_definition.json
+    if os.path.exists(struct_path):
+        return struct_path
+    # 如果都没有，返回空路径（空白配置）
+    return ''
 
 
 def config_file_path():
     """配置文件路径 - 支持开发和打包后的exe"""
     # 获取应用程序所在目录
     if getattr(sys, 'frozen', False):
-        # 打包后的exe，使用exe所在目录
+        # 打包后的exe，使用exe所在目录下的project_files文件夹
         base = os.path.dirname(sys.executable)
+        config_path = os.path.join(base, 'project_files', 'config.json')
     else:
-        # 开发环境，使用脚本所在目录的上一级
-        base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    return os.path.join(base, 'config.json')
+        # 开发环境，从get_app_dir()获取项目根目录
+        base = get_app_dir()
+        config_path = os.path.join(base, 'project_files', 'config.json')
+
+    # 清理重复的配置文件，只保留最新的
+    cleanup_duplicate_configs(base)
+
+    return config_path
+
+
+def cleanup_duplicate_configs(base_dir):
+    """清理重复的配置文件，只保留最新的"""
+    config_dir = os.path.join(base_dir, 'project_files')
+    if not os.path.exists(config_dir):
+        return
+
+    # 查找所有 config.json 文件（包括子目录）
+    pattern = os.path.join(config_dir, '**', 'config.json')
+    config_files = glob.glob(pattern, recursive=True)
+
+    if len(config_files) <= 1:
+        return
+
+    # 按修改时间排序，最新的在前
+    config_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+
+    # 保留最新的，删除其他的
+    latest = config_files[0]
+    for old_file in config_files[1:]:
+        try:
+            os.remove(old_file)
+            log.info(f'已删除旧配置文件: {old_file}')
+        except Exception as e:
+            log.warning(f'删除旧配置文件失败 {old_file}: {e}')
 
 
 def get_app_dir():
-    """获取应用程序所在目录"""
+    """获取应用程序所在目录（项目根目录）"""
     if getattr(sys, 'frozen', False):
+        # 打包后返回exe所在目录
         return os.path.dirname(sys.executable)
     else:
-        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        # 开发环境，从tools目录往上两级到项目根目录
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 
 def get_resource_path(relative_path):
@@ -76,6 +131,7 @@ def get_resource_path(relative_path):
     if getattr(sys, 'frozen', False):
         # 打包后的exe，从exe所在目录获取
         base_path = os.path.dirname(sys.executable)
+        # 打包时路径是 tools/logo/xxx，所以直接用相对路径
         resource_path = os.path.join(base_path, relative_path)
         if os.path.exists(resource_path):
             return resource_path
@@ -91,15 +147,27 @@ def get_resource_path(relative_path):
 
 
 class JsonEditor(QMainWindow):
-    def __init__(self, json_path=None):
+    def __init__(self, json_path=None, parent_window=None):
         super().__init__()
         self.setWindowTitle('Struct JSON 编辑器')
-        self.json_path = json_path or default_json_path()
+
+        # 处理空路径情况
+        if json_path:
+            self.json_path = json_path
+        else:
+            self.json_path = default_json_path()
+
         self.data = None
+        self.parent_window = parent_window  # 父窗口引用，用于保存后通知更新
         self.loading_config = True  # 配置加载标志，初始为True防止误触发
         log.debug('JsonEditor.__init__ start; json_path=%s', self.json_path)
         self.init_ui()
-        self.load_json(self.json_path)
+
+        # 如果有路径就加载，否则保持空白配置
+        if self.json_path and os.path.exists(self.json_path):
+            self.load_json(self.json_path)
+        else:
+            log.debug('JsonEditor.__init__: no valid json path, using blank config')
 
         # 加载配置
         self.load_config()
@@ -111,6 +179,10 @@ class JsonEditor(QMainWindow):
             self.on_theme_changed(self.loaded_theme)
 
         log.debug('JsonEditor.__init__ done')
+
+        # 安装事件过滤器用于捕获键盘映射按键
+        from modules.theme_utils import JsonEditorEventFilter
+        JsonEditorEventFilter(self)
 
     def load_config(self):
         """加载配置"""
@@ -253,6 +325,35 @@ class JsonEditor(QMainWindow):
                 self.chk_show_oscillo.setChecked(config.get('show_oscillo', False))
                 self.chk_show_oscillo.blockSignals(False)
 
+                # 先设置group的可见性
+                if hasattr(self, 'serial_keymap_group'):
+                    self.serial_keymap_group.setVisible(config.get('show_keymap', False))
+
+                # 然后恢复复选框状态（不触发信号）
+                self.chk_show_keymap.blockSignals(True)
+                self.chk_show_keymap.setChecked(config.get('show_keymap', False))
+                self.chk_show_keymap.blockSignals(False)
+
+                # 恢复字节序配置
+                if hasattr(self, 'endian_cb'):
+                    endian_text = config.get('endian', '小端 (Little Endian)')
+                    self.endian_cb.blockSignals(True)
+                    if endian_text in ['小端 (Little Endian)', '大端 (Big Endian)']:
+                        self.endian_cb.setCurrentText(endian_text)
+                    self.endian_cb.blockSignals(False)
+
+                # 恢复键盘映射配置
+                if 'keymap' in config and hasattr(self, '_load_keymap_config'):
+                    self._load_keymap_config(config.get('keymap', []))
+
+                # 恢复上次使用的结构体配置文件路径
+                log.debug(f'load_config: checking last_struct_config in config, keys={list(config.keys())}')
+                if 'last_struct_config' in config:
+                    self.last_struct_config = config.get('last_struct_config', '')
+                    log.debug(f'load_config: loaded last_struct_config={self.last_struct_config}')
+                else:
+                    log.debug(f'load_config: last_struct_config NOT in config')
+
             # 恢复已加载的协议列表
             if 'protocols_loaded' in config and hasattr(self, 'load_protocol'):
                 saved_protocols = config.get('protocols_loaded', [])
@@ -309,6 +410,26 @@ class JsonEditor(QMainWindow):
                         except Exception as e:
                             log.warning('Failed to load debug protocol from config: %s', e)
 
+            # 初始化全局协议列表并更新所有下拉框
+            if hasattr(self, 'protocols_loaded') and self.protocols_loaded:
+                self.all_protocols = []
+                for proto in self.protocols_loaded:
+                    if os.path.exists(proto.get('path', '')):
+                        try:
+                            with open(proto['path'], 'r', encoding='utf-8') as f:
+                                protocol = json.load(f)
+                            struct_name = protocol.get('structName', proto.get('name', ''))
+                            self.all_protocols.append({
+                                'path': proto['path'],
+                                'name': struct_name,
+                                'data': protocol
+                            })
+                        except Exception as e:
+                            log.warning(f'Failed to reload protocol: {e}')
+                # 更新所有协议下拉框
+                if hasattr(self, '_update_all_protocol_combos'):
+                    self._update_all_protocol_combos()
+
             log.info('Config loaded from %s', config_path)
 
         except Exception as e:
@@ -321,6 +442,11 @@ class JsonEditor(QMainWindow):
             return
 
         config_path = config_file_path()
+
+        # 确保目录存在
+        config_dir = os.path.dirname(config_path)
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir, exist_ok=True)
 
         try:
             config = {
@@ -350,6 +476,11 @@ class JsonEditor(QMainWindow):
                 'show_debug': self.chk_show_debug.isChecked() if hasattr(self, 'chk_show_debug') else False,
                 'show_parse': self.chk_show_parse.isChecked() if hasattr(self, 'chk_show_parse') else False,
                 'show_oscillo': self.chk_show_oscillo.isChecked() if hasattr(self, 'chk_show_oscillo') else False,
+                'show_keymap': self.chk_show_keymap.isChecked() if hasattr(self, 'chk_show_keymap') else False,
+                # 字节序配置
+                'endian': self.endian_cb.currentText() if hasattr(self, 'endian_cb') else '小端 (Little Endian)',
+                # 键盘映射配置
+                'keymap': self._get_keymap_config() if hasattr(self, 'keymap_widgets') else [],
                 # 已加载的协议列表
                 'protocols_loaded': getattr(self, 'protocols_loaded', []),
                 # 已加载的调试协议列表
@@ -357,7 +488,10 @@ class JsonEditor(QMainWindow):
                     {'name': name, 'path': getattr(self, 'debug_protocols_paths', {}).get(name, '')}
                     for name in getattr(self, 'debug_protocols', {}).keys()
                 ] if hasattr(self, 'debug_protocols') else [],
+                # 上次使用的结构体配置文件路径
+                'last_struct_config': getattr(self, 'last_struct_config', ''),
             }
+            log.debug(f'save_config: saving last_struct_config={getattr(self, "last_struct_config", "NOT SET")}')
 
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
@@ -366,6 +500,52 @@ class JsonEditor(QMainWindow):
 
         except Exception as e:
             log.warning('Failed to save config: %s', e)
+
+    def _get_keymap_config(self):
+        """获取键盘映射配置"""
+        if not hasattr(self, 'keymap_widgets'):
+            return []
+
+        config = []
+        for item in self.keymap_widgets:
+            config.append({
+                'enabled': item['enable'].isChecked(),
+                'key': item['key'],
+                'key_code': item['key_code'],
+                'protocol': item['protocol_cb'].currentText(),
+                'value': item['value_edit'].text(),
+            })
+        return config
+
+    def _load_keymap_config(self, config):
+        """加载键盘映射配置"""
+        if not hasattr(self, 'keymap_widgets') or not config:
+            return
+
+        # 更新协议下拉框
+        protocol_names = ['无'] + [p.get('name', '未命名') for p in getattr(self, 'protocols_loaded', [])]
+
+        for i, item in enumerate(self.keymap_widgets):
+            if i < len(config):
+                cfg = config[i]
+                item['enable'].setChecked(cfg.get('enabled', False))
+                item['key'] = cfg.get('key')
+                item['key_code'] = cfg.get('key_code')
+                key_text = cfg.get('key', '未绑定')
+                if not key_text:
+                    key_text = '未绑定'
+                item['key_label'].setText(key_text)
+
+                # 更新协议下拉框
+                item['protocol_cb'].clear()
+                item['protocol_cb'].addItems(protocol_names)
+                proto = cfg.get('protocol', '无')
+                if proto in protocol_names:
+                    item['protocol_cb'].setCurrentText(proto)
+                else:
+                    item['protocol_cb'].setCurrentText('无')
+
+                item['value_edit'].setText(cfg.get('value', ''))
 
     def moveEvent(self, event):
         """窗口移动时保存位置"""
@@ -430,10 +610,17 @@ class JsonEditor(QMainWindow):
 
         # 添加 logo（支持开发和打包后的exe），1.5倍大小
         logo_height = 48  # 32 * 1.5 = 48
-        logo_paths = [
-            get_resource_path(os.path.join('..', 'tools', 'logo', 'qrs_logo.png')),
-            get_resource_path(os.path.join('..', 'tools', 'logo', 'yqlogo.jpg'))
-        ]
+        # 开发环境用相对路径，打包后用 tools/logo/xxx
+        if getattr(sys, 'frozen', False):
+            logo_paths = [
+                get_resource_path(os.path.join('tools', 'logo', 'qrs_logo.png')),
+                get_resource_path(os.path.join('tools', 'logo', 'yqlogo.jpg'))
+            ]
+        else:
+            logo_paths = [
+                get_resource_path(os.path.join('..', 'tools', 'logo', 'qrs_logo.png')),
+                get_resource_path(os.path.join('..', 'tools', 'logo', 'yqlogo.jpg'))
+            ]
         for logo_path in logo_paths:
             if os.path.exists(logo_path):
                 try:
@@ -494,44 +681,128 @@ class JsonEditor(QMainWindow):
         hname.addWidget(QLabel('structName:'))
         self.struct_name = QLineEdit()
         hname.addWidget(self.struct_name)
+
+        # 大小端选择
+        hname.addWidget(QLabel('字节序:'))
+        self.struct_endian_cb = QComboBox()
+        self.struct_endian_cb.addItems(['小端 (Little Endian)', '大端 (Big Endian)'])
+        self.struct_endian_cb.setToolTip('小端: 低字节在前 (常见于x86)\n大端: 高字节在前 (网络协议)')
+        hname.addWidget(self.struct_endian_cb)
         v.addLayout(hname)
 
-        # 包头/包尾 配置
-        hhf = QHBoxLayout()
-        self.chk_hf = QCheckBox('启用包头/包尾')
-        self.chk_hf.stateChanged.connect(self.on_toggle_hf)
-        hhf.addWidget(self.chk_hf)
-        hhf.addWidget(QLabel('Header:'))
+        # 帧头/帧尾配置
+        self.frame_header_group = QGroupBox('帧头/帧尾配置')
+        frame_hh = QVBoxLayout()
+
+        # 第一行：帧头配置
+        hhf1 = QHBoxLayout()
+        self.chk_header = QCheckBox('Header')
+        self.chk_header.setChecked(True)
+        self.chk_header.stateChanged.connect(self.on_toggle_header_footer)
+        hhf1.addWidget(self.chk_header)
+
         self.edit_header = QLineEdit('0xAA')
         self.edit_header.setFixedWidth(80)
-        hhf.addWidget(self.edit_header)
-        hhf.addWidget(QLabel('Header字节数:'))
+        hhf1.addWidget(self.edit_header)
+
+        hhf1.addWidget(QLabel('字节数:'))
         self.spin_header_len = QSpinBox()
         self.spin_header_len.setRange(1, 8)
         self.spin_header_len.setValue(1)
         self.spin_header_len.setFixedWidth(60)
-        hhf.addWidget(self.spin_header_len)
-        hhf.addWidget(QLabel('Footer字节数:'))
+        hhf1.addWidget(self.spin_header_len)
+
+        hhf1.addStretch()
+        frame_hh.addLayout(hhf1)
+
+        # 第二行：帧尾配置
+        hhf2 = QHBoxLayout()
+        self.chk_footer = QCheckBox('Footer')
+        self.chk_footer.setChecked(True)
+        self.chk_footer.stateChanged.connect(self.on_toggle_header_footer)
+        hhf2.addWidget(self.chk_footer)
+
+        hhf2.addWidget(QLabel('字节数:'))
         self.spin_footer_len = QSpinBox()
         self.spin_footer_len.setRange(1, 8)
         self.spin_footer_len.setValue(1)
         self.spin_footer_len.setFixedWidth(60)
-        hhf.addWidget(self.spin_footer_len)
-        hhf.addStretch()
-        self.chk_data_len = QCheckBox('包含data_len')
-        self.chk_data_len.setChecked(True)
-        hhf.addWidget(self.chk_data_len)
-        hhf.addStretch()
-        hhf.addWidget(QLabel('Footer:'))
+        hhf2.addWidget(self.spin_footer_len)
+
         self.edit_footer = QLineEdit('0x55')
         self.edit_footer.setFixedWidth(80)
-        hhf.addWidget(self.edit_footer)
-        v.addLayout(hhf)
+        hhf2.addWidget(self.edit_footer)
 
-        # 表格：字段
+        hhf2.addStretch()
+        frame_hh.addLayout(hhf2)
+
+        # 第三行：data_len配置
+        hhf3 = QHBoxLayout()
+        self.chk_data_len = QCheckBox('包含data_len')
+        self.chk_data_len.setChecked(True)
+        hhf3.addWidget(self.chk_data_len)
+
+        hhf3.addWidget(QLabel('  长度模式:'))
+        self.data_len_mode_cb = QComboBox()
+        self.data_len_mode_cb.addItems(['仅数据', '含校验', '完整帧'])
+        self.data_len_mode_cb.setToolTip('仅数据: 只计算数据字段长度\n含校验: 数据+校验和\n完整帧: header+len+数据+校验和')
+        hhf3.addWidget(self.data_len_mode_cb)
+
+        hhf3.addWidget(QLabel(' 含:'))
+        self.chk_dl_include_header = QCheckBox('帧头')
+        self.chk_dl_include_header.setToolTip('长度是否包含帧头')
+        hhf3.addWidget(self.chk_dl_include_header)
+        self.chk_dl_include_footer = QCheckBox('帧尾')
+        self.chk_dl_include_footer.setToolTip('长度是否包含帧尾')
+        hhf3.addWidget(self.chk_dl_include_footer)
+        self.chk_dl_include_checksum = QCheckBox('校验')
+        self.chk_dl_include_checksum.setToolTip('长度是否包含校验和')
+        self.chk_dl_include_checksum.setChecked(True)
+        hhf3.addWidget(self.chk_dl_include_checksum)
+
+        # 校验和计算范围
+        hhf3.addWidget(QLabel(' 范围:'))
+        self.checksum_range_cb = QComboBox()
+        self.checksum_range_cb.addItems(['仅数据', '含datalen', '全帧(不含校验)'])
+        self.checksum_range_cb.setToolTip('校验和计算范围:\n仅数据: 只计算数据字段\n含datalen: 数据+长度字段')
+        hhf3.addWidget(self.checksum_range_cb)
+
+        hhf3.addStretch()
+        frame_hh.addLayout(hhf3)
+
+        self.frame_header_group.setLayout(frame_hh)
+        v.addWidget(self.frame_header_group)
+
+        # 高级选项
+        self.advanced_group = QGroupBox('高级选项')
+        advanced_v = QVBoxLayout()
+
+        # 校验和计算范围
+        hverify = QHBoxLayout()
+        hverify.addWidget(QLabel('校验方式:'))
+        self.verify_type_cb = QComboBox()
+        self.verify_type_cb.addItems(['无校验', 'CRC8', 'CRC16', '求和校验(Sum)', '异或校验(XOR)'])
+        self.verify_type_cb.setCurrentText('求和校验(Sum)')
+        hverify.addWidget(self.verify_type_cb)
+
+        # 字节对齐选项
+        hverify.addWidget(QLabel('  字节对齐:'))
+        self.align_cb = QComboBox()
+        self.align_cb.addItems(['1', '2', '4', '8'])
+        self.align_cb.setCurrentText('4')
+        hverify.addWidget(self.align_cb)
+
+        hverify.addStretch()
+        advanced_v.addLayout(hverify)
+        self.advanced_group.setLayout(advanced_v)
+        v.addWidget(self.advanced_group)
+
+        # 表格：字段（只有char类型才显示char_length列）
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(['name', 'type', 'length'])
+        self.table.setHorizontalHeaderLabels(['name', 'type', 'char_length'])
         self.table.horizontalHeader().setStretchLastSection(True)
+        # 默认隐藏 char_length 列
+        self.table.setColumnHidden(2, True)
         # 使表格背景透明且禁用交替行高亮
         try:
             self.table.setStyleSheet('background: transparent;')
@@ -558,24 +829,6 @@ class JsonEditor(QMainWindow):
         btn_gen.clicked.connect(self.on_generate)
         hbtn.addWidget(btn_gen)
         v.addLayout(hbtn)
-
-        # 校验方式选择
-        hverify = QHBoxLayout()
-        hverify.addWidget(QLabel('校验方式:'))
-        self.verify_type_cb = QComboBox()
-        self.verify_type_cb.addItems(['无校验', 'CRC8', 'CRC16', '求和校验(Sum)', '异或校验(XOR)'])
-        self.verify_type_cb.setCurrentText('求和校验(Sum)')
-        hverify.addWidget(self.verify_type_cb)
-
-        # 字节对齐选项
-        hverify.addWidget(QLabel('  字节对齐:'))
-        self.align_cb = QComboBox()
-        self.align_cb.addItems(['1', '2', '4', '8'])
-        self.align_cb.setCurrentText('4')
-        hverify.addWidget(self.align_cb)
-
-        hverify.addStretch()
-        v.addLayout(hverify)
 
         # 创建结构体配置标签页（带滚动条）
         struct_widget = QWidget()
@@ -619,43 +872,75 @@ class JsonEditor(QMainWindow):
         self.path_edit.setText(path)
         # populate
         self.struct_name.setText(self.data.get('structName', ''))
+        # 恢复大小端设置
+        endian = self.data.get('endian', 'little')
+        if endian == 'little':
+            self.struct_endian_cb.setCurrentText('小端 (Little Endian)')
+        else:
+            self.struct_endian_cb.setCurrentText('大端 (Big Endian)')
+
         fields = self.data.get('fields', [])
         self.table.setRowCount(0)
         for fld in fields:
             name = fld.get('name', '')
             typ = fld.get('type', 'int')
-            if 'length' in fld:
-                length = fld.get('length')
+            # 只有 char 类型才读取 length，其他类型设为0
+            if typ == 'char':
+                length = fld.get('length', 32)
             else:
-                # 如果是 char 则默认 32，否则默认 4
-                length = 32 if typ == 'char' else 4
+                length = 0
             self._append_row(name, typ, length)
-        # 处理 header/footer
+        # 处理 header/footer - 分别处理
         header = self.data.get('header', None)
         footer = self.data.get('footer', None)
         header_len = self.data.get('header_len', 1)
-        if header is not None and footer is not None:
-            self.chk_hf.setChecked(True)
+        footer_len = self.data.get('footer_len', 1)
+
+        # Header 设置
+        if header is not None:
+            self.chk_header.setChecked(True)
             try:
                 self.edit_header.setText(hex(int(header)))
             except Exception:
                 self.edit_header.setText(str(header))
+            self.spin_header_len.setValue(header_len)
+        else:
+            self.chk_header.setChecked(False)
+            self.edit_header.setText('0xAA')
+            self.spin_header_len.setValue(1)
+
+        # Footer 设置
+        if footer is not None:
+            self.chk_footer.setChecked(True)
             try:
                 self.edit_footer.setText(hex(int(footer)))
             except Exception:
                 self.edit_footer.setText(str(footer))
-            self.spin_header_len.setValue(header_len)
-            footer_len = self.data.get('footer_len', 1)
             self.spin_footer_len.setValue(footer_len)
-            data_len_enabled = self.data.get('data_len', True)
-            self.chk_data_len.setChecked(data_len_enabled)
         else:
-            self.chk_hf.setChecked(False)
-            self.edit_header.setText('0xAA')
+            self.chk_footer.setChecked(False)
             self.edit_footer.setText('0x55')
-            self.spin_header_len.setValue(1)
             self.spin_footer_len.setValue(1)
-            self.chk_data_len.setChecked(True)
+
+        # data_len 设置
+        data_len_enabled = self.data.get('data_len', True)
+        self.chk_data_len.setChecked(data_len_enabled)
+
+        # data_len 详细配置
+        mode_map = {'data_only': '仅数据', 'with_checksum': '含校验', 'full_frame': '完整帧'}
+        mode = self.data.get('data_len_mode', 'data_only')
+        self.data_len_mode_cb.setCurrentText(mode_map.get(mode, '仅数据'))
+        self.chk_dl_include_header.setChecked(self.data.get('data_len_include_header', False))
+        self.chk_dl_include_footer.setChecked(self.data.get('data_len_include_footer', False))
+        self.chk_dl_include_checksum.setChecked(self.data.get('data_len_include_checksum', True))
+
+        # 校验和计算范围
+        checksum_range_map = {'data_only': '仅数据', 'with_datalen': '含datalen', 'full_frame': '全帧(不含校验)'}
+        checksum_range = self.data.get('checksum_range', 'data_only')
+        self.checksum_range_cb.setCurrentText(checksum_range_map.get(checksum_range, '仅数据'))
+
+        # 更新控件状态
+        self.on_toggle_header_footer()
 
         # 处理校验方式
         verify_map = {
@@ -672,7 +957,7 @@ class JsonEditor(QMainWindow):
         align = self.data.get('align', 4)
         self.align_cb.setCurrentText(str(align))
 
-        self.on_toggle_hf()
+        self.on_toggle_header_footer()
 
     def _append_row(self, name, typ, length):
         r = self.table.rowCount()
@@ -687,25 +972,29 @@ class JsonEditor(QMainWindow):
             cb.setCurrentText(typ)
         cb.currentTextChanged.connect(partial(self.on_type_changed, r))
         self.table.setCellWidget(r, 1, cb)
-        # length spinner
+        # char_length spinner - 只有 char 类型才显示
         sp = QSpinBox()
-        sp.setRange(1, 1024)
-        # 根据类型设置默认值：char 的 length 有意义，默认 32；其他类型默认 4
+        sp.setRange(0, 1024)
+        # 根据类型设置：char 的 length 有意义，默认 32；其他类型隐藏且值为0
         if typ == 'char':
             sp.setValue(int(length) if isinstance(length, int) else 32)
+            sp.setEnabled(True)
+            sp.setVisible(True)
         else:
-            sp.setValue(int(length) if isinstance(length, int) else 4)
-        # length only meaningful for 'char'
-        sp.setEnabled(typ == 'char')
+            sp.setValue(0)
+            sp.setEnabled(False)
+            sp.setVisible(False)
         self.table.setCellWidget(r, 2, sp)
+        # 更新列显示状态
+        self._update_char_length_column_visibility()
 
     def add_field(self):
-        self._append_row('field', 'int', 4)
+        self._append_row('field', 'int', 0)
 
     def insert_field(self):
         cur = self.table.currentRow()
         if cur < 0:
-            self._append_row('field', 'int', 4)
+            self._append_row('field', 'int', 0)
             return
         # insert before cur
         self.table.insertRow(cur)
@@ -717,22 +1006,45 @@ class JsonEditor(QMainWindow):
         cb.setCurrentText('int')
         cb.currentTextChanged.connect(partial(self.on_type_changed, cur))
         self.table.setCellWidget(cur, 1, cb)
+        # char_length - 只有 char 类型才有意义，默认隐藏
         sp = QSpinBox()
-        sp.setRange(1, 1024)
-        sp.setValue(4)
-        sp.setEnabled(False)
+        sp.setRange(0, 1024)
+        sp.setValue(0)
+        sp.setEnabled(False)  # 默认禁用，非 char 类型不显示
+        sp.setVisible(False)  # 默认隐藏
         self.table.setCellWidget(cur, 2, sp)
+        # 更新列显示状态
+        self._update_char_length_column_visibility()
 
     def remove_selected(self):
         rows = sorted(set(idx.row() for idx in self.table.selectedIndexes()), reverse=True)
         for r in rows:
             self.table.removeRow(r)
+        # 更新列显示状态
+        self._update_char_length_column_visibility()
 
     def on_type_changed(self, row, new_type):
-        # 根据 type 启用或禁用 length
+        # 根据 type 显示或隐藏 char_length（只有 char 类型才有意义）
         w = self.table.cellWidget(row, 2)
         if isinstance(w, QSpinBox):
-            w.setEnabled(new_type == 'char')
+            if new_type == 'char':
+                w.setEnabled(True)
+                w.setVisible(True)
+            else:
+                w.setEnabled(False)
+                w.setVisible(False)
+        # 更新列显示状态：如果存在任何 char 类型则显示，否则隐藏
+        self._update_char_length_column_visibility()
+
+    def _update_char_length_column_visibility(self):
+        """根据表中是否存在 char 类型来显示/隐藏 char_length 列"""
+        has_char = False
+        for r in range(self.table.rowCount()):
+            cb = self.table.cellWidget(r, 1)
+            if cb and cb.currentText() == 'char':
+                has_char = True
+                break
+        self.table.setColumnHidden(2, not has_char)
 
     def collect_fields(self):
         fields = []
@@ -764,7 +1076,10 @@ class JsonEditor(QMainWindow):
         # 更新 json_path
         self.json_path = file_path
         self.path_edit.setText(file_path)
-        obj = {'structName': self.struct_name.text(), 'fields': self.collect_fields()}
+        # 保存大小端设置
+        endian = 'little' if self.struct_endian_cb.currentText().startswith('小端') else 'big'
+
+        obj = {'structName': self.struct_name.text(), 'fields': self.collect_fields(), 'endian': endian}
 
         # 保存校验方式
         verify_type_map = {
@@ -779,23 +1094,29 @@ class JsonEditor(QMainWindow):
         # 保存字节对齐
         obj['align'] = int(self.align_cb.currentText())
 
-        # 如果启用了包头包尾，则验证并写入 header/footer
-        if self.chk_hf.isChecked():
-            try:
-                def parse_hex(s):
-                    s = s.strip()
-                    return int(s, 0)
+        # 分别处理 Header 和 Footer
+        try:
+            def parse_hex(s):
+                s = s.strip()
+                return int(s, 0)
+
+            # 处理 Header
+            if self.chk_header.isChecked():
                 h = parse_hex(self.edit_header.text())
-                f = parse_hex(self.edit_footer.text())
                 header_len = self.spin_header_len.value()
                 if header_len == 1:
                     if not (0 <= h <= 255):
                         raise ValueError('header 必须在 0-255 范围')
                 else:
-                    # 多字节header，检查是否在有效范围内
                     max_val = (256 ** header_len) - 1
                     if not (0 <= h <= max_val):
                         raise ValueError(f'{header_len}字节 header 必须在 0-{max_val} 范围')
+                obj['header'] = h
+                obj['header_len'] = header_len
+
+            # 处理 Footer
+            if self.chk_footer.isChecked():
+                f = parse_hex(self.edit_footer.text())
                 footer_len = self.spin_footer_len.value()
                 if footer_len == 1:
                     if not (0 <= f <= 255):
@@ -804,20 +1125,32 @@ class JsonEditor(QMainWindow):
                     max_val = (256 ** footer_len) - 1
                     if not (0 <= f <= max_val):
                         raise ValueError(f'{footer_len}字节 footer 必须在 0-{max_val} 范围')
-                data_len_enabled = self.chk_data_len.isChecked()
-                obj['header'] = h
-                obj['header_len'] = header_len
                 obj['footer'] = f
                 obj['footer_len'] = footer_len
-                obj['data_len'] = data_len_enabled
-            except Exception as e:
-                QMessageBox.critical(self, '保存失败', f'Header/Footer 值无效: {e}')
-                return
+
+            # data_len 设置
+            obj['data_len'] = self.chk_data_len.isChecked()
+
+            # data_len 详细配置
+            mode_map = {'仅数据': 'data_only', '含校验': 'with_checksum', '完整帧': 'full_frame'}
+            obj['data_len_mode'] = mode_map.get(self.data_len_mode_cb.currentText(), 'data_only')
+            obj['data_len_include_header'] = self.chk_dl_include_header.isChecked()
+            obj['data_len_include_footer'] = self.chk_dl_include_footer.isChecked()
+            obj['data_len_include_checksum'] = self.chk_dl_include_checksum.isChecked()
+            # 校验和计算范围
+            checksum_range_map = {'仅数据': 'data_only', '含datalen': 'with_datalen', '全帧(不含校验)': 'full_frame'}
+            obj['checksum_range'] = checksum_range_map.get(self.checksum_range_cb.currentText(), 'data_only')
+
+        except Exception as e:
+            QMessageBox.critical(self, '保存失败', f'Header/Footer 值无效: {e}')
+            return
         # 保存文件
         try:
             with open(self.json_path, 'w', encoding='utf-8') as fobj:
                 json.dump(obj, fobj, ensure_ascii=False, indent=2)
             QMessageBox.information(self, '保存', '保存成功')
+            # 通知父窗口更新协议
+            self._notify_parent_protocol_updated()
         except Exception as e:
             QMessageBox.critical(self, '保存失败', f'无法保存 JSON: {e}')
     def on_sync_changed(self):
@@ -832,7 +1165,10 @@ class JsonEditor(QMainWindow):
         if not self.json_path:
             QMessageBox.warning(self, '未指定', '请先选择一个 JSON 文件路径')
             return
-        obj = {'structName': self.struct_name.text(), 'fields': self.collect_fields()}
+        # 保存大小端设置
+        endian = 'little' if self.struct_endian_cb.currentText().startswith('小端') else 'big'
+
+        obj = {'structName': self.struct_name.text(), 'fields': self.collect_fields(), 'endian': endian}
 
         # 保存校验方式
         verify_type_map = {
@@ -847,15 +1183,16 @@ class JsonEditor(QMainWindow):
         # 保存字节对齐
         obj['align'] = int(self.align_cb.currentText())
 
-        if self.chk_hf.isChecked():
-            try:
-                def parse_hex(s):
-                    s = s.strip()
-                    return int(s, 0)
+        # 分别处理 Header 和 Footer
+        try:
+            def parse_hex(s):
+                s = s.strip()
+                return int(s, 0)
+
+            # 处理 Header
+            if self.chk_header.isChecked():
                 h = parse_hex(self.edit_header.text())
-                f = parse_hex(self.edit_footer.text())
                 header_len = self.spin_header_len.value()
-                footer_len = self.spin_footer_len.value()
                 if header_len == 1:
                     if not (0 <= h <= 255):
                         raise ValueError('header 必须在 0-255 范围')
@@ -863,6 +1200,13 @@ class JsonEditor(QMainWindow):
                     max_val = (256 ** header_len) - 1
                     if not (0 <= h <= max_val):
                         raise ValueError(f'{header_len}字节 header 必须在 0-{max_val} 范围')
+                obj['header'] = h
+                obj['header_len'] = header_len
+
+            # 处理 Footer
+            if self.chk_footer.isChecked():
+                f = parse_hex(self.edit_footer.text())
+                footer_len = self.spin_footer_len.value()
                 if footer_len == 1:
                     if not (0 <= f <= 255):
                         raise ValueError('footer 必须在 0-255 范围')
@@ -870,18 +1214,30 @@ class JsonEditor(QMainWindow):
                     max_val = (256 ** footer_len) - 1
                     if not (0 <= f <= max_val):
                         raise ValueError(f'{footer_len}字节 footer 必须在 0-{max_val} 范围')
-                data_len_enabled = self.chk_data_len.isChecked()
-                obj['header'] = h
-                obj['header_len'] = header_len
                 obj['footer'] = f
                 obj['footer_len'] = footer_len
-                obj['data_len'] = data_len_enabled
-            except Exception as e:
-                QMessageBox.critical(self, '生成失败', f'Header/Footer 值无效: {e}')
-                return
+
+            # data_len 设置
+            obj['data_len'] = self.chk_data_len.isChecked()
+
+            # data_len 详细配置
+            mode_map = {'仅数据': 'data_only', '含校验': 'with_checksum', '完整帧': 'full_frame'}
+            obj['data_len_mode'] = mode_map.get(self.data_len_mode_cb.currentText(), 'data_only')
+            obj['data_len_include_header'] = self.chk_dl_include_header.isChecked()
+            obj['data_len_include_footer'] = self.chk_dl_include_footer.isChecked()
+            obj['data_len_include_checksum'] = self.chk_dl_include_checksum.isChecked()
+            # 校验和计算范围
+            checksum_range_map = {'仅数据': 'data_only', '含datalen': 'with_datalen', '全帧(不含校验)': 'full_frame'}
+            obj['checksum_range'] = checksum_range_map.get(self.checksum_range_cb.currentText(), 'data_only')
+
+        except Exception as e:
+            QMessageBox.critical(self, '生成失败', f'Header/Footer 值无效: {e}')
+            return
         try:
             with open(self.json_path, 'w', encoding='utf-8') as fobj:
                 json.dump(obj, fobj, ensure_ascii=False, indent=2)
+            # 通知父窗口更新协议
+            self._notify_parent_protocol_updated()
         except Exception as e:
             QMessageBox.critical(self, '生成失败', f'无法保存 JSON: {e}')
             return
@@ -916,10 +1272,139 @@ class JsonEditor(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, '生成失败', f'调用生成器失败: {e}')
 
-    def on_toggle_hf(self):
-        en = self.chk_hf.isChecked()
-        self.edit_header.setEnabled(en)
-        self.edit_footer.setEnabled(en)
+    def on_toggle_header_footer(self):
+        """分别启用/禁用包头和包尾"""
+        header_en = self.chk_header.isChecked()
+        footer_en = self.chk_footer.isChecked()
+        self.edit_header.setEnabled(header_en)
+        self.spin_header_len.setEnabled(header_en)
+        self.edit_footer.setEnabled(footer_en)
+        self.spin_footer_len.setEnabled(footer_en)
+
+    def _notify_parent_protocol_updated(self):
+        """通知父窗口协议已更新"""
+        # 确定目标窗口（父窗口或自身）
+        target_window = self.parent_window if self.parent_window else self
+
+        # 保存当前配置文件路径到父窗口
+        target_window.last_struct_config = self.json_path
+        log.debug(f'_notify_parent_protocol_updated: saving last_struct_config={self.json_path}')
+        if hasattr(target_window, 'save_config'):
+            target_window.save_config()
+            log.debug(f'_notify_parent_protocol_updated: save_config called')
+
+        # 重新加载当前协议文件
+        try:
+            with open(self.json_path, 'r', encoding='utf-8') as f:
+                proto_data = json.load(f)
+
+            # 使用 structName 或文件名作为协议名称
+            proto_name = proto_data.get('structName', os.path.basename(self.json_path))
+
+            # 更新目标窗口的 protocols_loaded
+            if hasattr(target_window, 'protocols_loaded'):
+                found = False
+                for i, proto in enumerate(target_window.protocols_loaded):
+                    # 同时通过路径和名称匹配
+                    if proto.get('path') == self.json_path or proto.get('name') == proto_name:
+                        # 更新现有协议
+                        target_window.protocols_loaded[i] = {
+                            'path': self.json_path,
+                            'name': proto_name,
+                            'data': proto_data
+                        }
+                        found = True
+                        break
+
+                if not found:
+                    # 添加新协议
+                    target_window.protocols_loaded.append({
+                        'path': self.json_path,
+                        'name': proto_name,
+                        'data': proto_data
+                    })
+
+            # 更新目标窗口的所有协议下拉框
+            if hasattr(target_window, '_update_all_protocol_combos'):
+                target_window._update_all_protocol_combos()
+
+            # 更新帧解析模块的协议内容显示
+            if hasattr(target_window, 'protocol_content'):
+                content = json.dumps(proto_data, indent=2, ensure_ascii=False)
+                target_window.protocol_content.setPlainText(content)
+
+            # 更新调试模块的协议内容（如果存在）
+            if hasattr(target_window, 'debug_protocol_content'):
+                target_window.debug_protocol_content.setPlainText(content)
+
+            # 同步当前选中的协议
+            if hasattr(target_window, 'protocol_cb'):
+                target_window.protocol_cb.setCurrentText(proto_name)
+            if hasattr(target_window, 'debug_protocol_cb'):
+                target_window.debug_protocol_cb.setCurrentText(proto_name)
+
+            # 如果有示波器窗口，也更新它
+            if hasattr(target_window, 'oscillo_window') and target_window.oscillo_window:
+                target_window.oscillo_window.set_data_from_protocol(proto_data)
+
+            # 如果是独立窗口，则也更新主窗口（如果存在）
+            if self.parent_window and self.parent_window != target_window:
+                self._update_main_window_protocol(proto_name, proto_data)
+
+            log.info(f'协议已更新: {proto_name}')
+
+        except Exception as e:
+            log.warning(f'通知父窗口更新协议失败: {e}')
+
+    def _update_main_window_protocol(self, proto_name, proto_data):
+        """更新主窗口的协议数据"""
+        main_window = self.parent_window
+
+        # 更新主窗口的 protocols_loaded
+        if hasattr(main_window, 'protocols_loaded'):
+            found = False
+            for i, proto in enumerate(main_window.protocols_loaded):
+                if proto.get('path') == self.json_path or proto.get('name') == proto_name:
+                    main_window.protocols_loaded[i] = {
+                        'path': self.json_path,
+                        'name': proto_name,
+                        'data': proto_data
+                    }
+                    found = True
+                    break
+            if not found:
+                main_window.protocols_loaded.append({
+                    'path': self.json_path,
+                    'name': proto_name,
+                    'data': proto_data
+                })
+
+        # 更新主窗口的 debug_protocols（协议调试模块使用的字典）
+        if hasattr(main_window, 'debug_protocols'):
+            main_window.debug_protocols[proto_name] = proto_data
+
+        # 更新主窗口的所有协议下拉框
+        if hasattr(main_window, '_update_all_protocol_combos'):
+            main_window._update_all_protocol_combos()
+
+        # 更新主窗口的协议内容显示
+        if hasattr(main_window, 'protocol_content'):
+            content = json.dumps(proto_data, indent=2, ensure_ascii=False)
+            main_window.protocol_content.setPlainText(content)
+
+        # 同步主窗口当前选中的协议
+        if hasattr(main_window, 'protocol_cb'):
+            main_window.protocol_cb.setCurrentText(proto_name)
+
+        # 如果当前选中的调试协议就是要更新的协议，则刷新调试表格
+        if hasattr(main_window, 'debug_protocol_cb'):
+            current = main_window.debug_protocol_cb.currentText()
+            if current == proto_name:
+                # 重新填充调试表格
+                if hasattr(main_window, 'populate_debug_table'):
+                    main_window.populate_debug_table(proto_data)
+
+        log.info(f'主窗口协议已更新: {proto_name}')
 
     def apply_theme(self, theme_name='暗色主题'):
         """应用主题设置。"""
@@ -1216,6 +1701,10 @@ class JsonEditor(QMainWindow):
         self.chk_show_oscillo.stateChanged.connect(lambda s: (self._toggle_section('oscillo', s), self.save_config()))
         toggle_bar.addWidget(self.chk_show_oscillo)
 
+        self.chk_show_keymap = QCheckBox('键盘映射')
+        self.chk_show_keymap.stateChanged.connect(lambda s: (self._toggle_section('keymap', s), self.save_config()))
+        toggle_bar.addWidget(self.chk_show_keymap)
+
         toggle_bar.addStretch()
         v.addLayout(toggle_bar)
 
@@ -1285,7 +1774,12 @@ class JsonEditor(QMainWindow):
         self.btn_open_serial = QPushButton('打开串口')
         self.btn_open_serial.clicked.connect(self.toggle_serial)
         config_grid.addWidget(self.btn_open_serial, 0, 6)
-        config_grid.addWidget(QLabel(''), 1, 6)
+
+        # 扫描协议文件夹按钮
+        self.btn_scan_all_protocols = QPushButton('扫描协议')
+        self.btn_scan_all_protocols.setToolTip('扫描协议文件夹，加载所有协议供全局使用')
+        self.btn_scan_all_protocols.clicked.connect(self.scan_all_protocols_folder)
+        config_grid.addWidget(self.btn_scan_all_protocols, 1, 6)
 
         config_group.setObjectName('config_group')
         config_group.setLayout(config_grid)
@@ -1353,6 +1847,31 @@ class JsonEditor(QMainWindow):
         send_group.setLayout(send_v)
         self.serial_send_group = send_group
         self.main_splitter.addWidget(send_group)
+
+        # 键盘映射区域
+        keymap_group = QGroupBox('键盘映射')
+        keymap_v = QVBoxLayout()
+
+        # 说明标签
+        keymap_v.addWidget(QLabel('绑定键盘按键快速发送数据（最多8个，按F1-F8或自定义按键）'))
+
+        # 键盘映射配置区域
+        self.keymap_widgets = []  # 存储每个按键的配置控件
+        self.key_capturing = [False] * 8  # 标记是否正在捕获按键
+
+        # 创建8个键盘映射槽位
+        for i in range(8):
+            keymap_item = self._create_keymap_item(i)
+            self.keymap_widgets.append(keymap_item)
+            keymap_v.addWidget(keymap_item['widget'])
+
+        # 启用全局键盘监听提示
+        keymap_v.addWidget(QLabel('提示: 点击"捕获按键"按钮，然后按下要绑定的键盘按键'))
+
+        keymap_group.setObjectName('keymap_group')
+        keymap_group.setLayout(keymap_v)
+        self.serial_keymap_group = keymap_group
+        self.main_splitter.addWidget(keymap_group)
 
         # 接收区域
         recv_group = QGroupBox('接收')
@@ -1506,16 +2025,7 @@ class JsonEditor(QMainWindow):
         self.btn_load_protocol.clicked.connect(self.load_debug_protocol)
         debug_ctrl_h.addWidget(self.btn_load_protocol)
 
-        self.btn_scan_protocols = QPushButton('扫描协议文件夹')
-        self.btn_scan_protocols.clicked.connect(self.scan_protocols_folder)
-        debug_ctrl_h.addWidget(self.btn_scan_protocols)
-
-        # 协议文件夹路径输入
-        self.protocol_folder_edit = QLineEdit()
-        self.protocol_folder_edit.setPlaceholderText('协议文件夹路径')
-        self.protocol_folder_edit.setFixedWidth(200)
-        debug_ctrl_h.addWidget(self.protocol_folder_edit)
-
+        # 协议下拉框（通过串口配置的"扫描协议"按钮统一加载）
         debug_ctrl_h.addWidget(QLabel('协议:'))
         self.debug_protocol_cb = QComboBox()
         self.debug_protocol_cb.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -1590,15 +2100,19 @@ class JsonEditor(QMainWindow):
         self.btn_load_protocol.clicked.connect(self.load_protocol)
         parse_h.addWidget(self.btn_load_protocol)
 
-        self.btn_scan_protocols_parse = QPushButton('扫描协议文件夹')
-        self.btn_scan_protocols_parse.clicked.connect(self.scan_protocols_folder_for_parse)
-        parse_h.addWidget(self.btn_scan_protocols_parse)
+        # 编辑协议按钮
+        self.btn_edit_protocol = QPushButton('编辑协议')
+        self.btn_edit_protocol.clicked.connect(self.edit_current_protocol)
+        self.btn_edit_protocol.setToolTip('用结构体编辑器打开当前协议文件')
+        parse_h.addWidget(self.btn_edit_protocol)
 
-        # 协议文件夹路径输入
-        self.protocol_folder_edit_parse = QLineEdit()
-        self.protocol_folder_edit_parse.setPlaceholderText('协议文件夹路径')
-        self.protocol_folder_edit_parse.setFixedWidth(150)
-        parse_h.addWidget(self.protocol_folder_edit_parse)
+        # 添加大小端选择
+        parse_h.addWidget(QLabel('字节序:'))
+        self.endian_cb = QComboBox()
+        self.endian_cb.addItems(['小端 (Little Endian)', '大端 (Big Endian)'])
+        self.endian_cb.setToolTip('小端: 低字节在前 (常见于x86)\n大端: 高字节在前 (网络协议)')
+        self.endian_cb.currentTextChanged.connect(lambda _: self.save_config())
+        parse_h.addWidget(self.endian_cb)
 
         # 添加多协议自动解析选项
         self.chk_multi_protocol = QCheckBox('多协议自动解析')
@@ -1774,11 +2288,443 @@ class JsonEditor(QMainWindow):
             'debug': getattr(self, 'serial_debug_group', None),
             'parse': getattr(self, 'serial_parse_group', None),
             'oscillo': getattr(self, 'serial_oscillo_group', None),
+            'keymap': getattr(self, 'serial_keymap_group', None),
         }
 
         group = section_map.get(section_name)
         if group:
             group.setVisible(visible)
+
+    def _create_keymap_item(self, index):
+        """创建单个键盘映射项"""
+        from functools import partial
+
+        widget = QWidget()
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 2, 0, 2)
+
+        # 启用复选框
+        chk_enable = QCheckBox()
+        chk_enable.setFixedWidth(30)
+        layout.addWidget(chk_enable)
+
+        # 槽位编号
+        layout.addWidget(QLabel(f'{index + 1}:'))
+
+        # 捕获按键按钮
+        btn_capture = QPushButton('点击捕获')
+        btn_capture.setFixedWidth(80)
+        layout.addWidget(btn_capture)
+
+        # 显示绑定的按键
+        key_label = QLabel('未绑定')
+        key_label.setFixedWidth(60)
+        layout.addWidget(key_label)
+
+        # 协议选择
+        layout.addWidget(QLabel('协议:'))
+        protocol_cb = QComboBox()
+        protocol_cb.addItems(['无'] + [p.get('name', '未命名') for p in getattr(self, 'protocols_loaded', [])])
+        protocol_cb.setMinimumWidth(100)
+        layout.addWidget(protocol_cb)
+
+        # 发送值输入
+        layout.addWidget(QLabel('值:'))
+        value_edit = QLineEdit()
+        value_edit.setPlaceholderText('点击填写或手动输入')
+        value_edit.setMinimumWidth(120)
+        # 点击值输入框时弹出协议数据填写对话框
+        value_edit.mousePressEvent = lambda event, idx=index: self._show_keymap_value_dialog(idx)
+        layout.addWidget(value_edit)
+
+        # 发送按钮
+        btn_send = QPushButton('测试发送')
+        btn_send.setFixedWidth(80)
+        layout.addWidget(btn_send)
+
+        layout.addStretch()
+
+        widget.setLayout(layout)
+
+        # 存储控件引用
+        item = {
+            'widget': widget,
+            'enable': chk_enable,
+            'capture_btn': btn_capture,
+            'key_label': key_label,
+            'protocol_cb': protocol_cb,
+            'value_edit': value_edit,
+            'send_btn': btn_send,
+            'key': None,  # 绑定的按键
+            'key_code': None,  # 按键代码
+        }
+
+        # 连接信号
+        btn_capture.clicked.connect(partial(self._start_capture_key, index))
+        btn_send.clicked.connect(partial(self._test_keymap_send, index))
+        # 协议选择变化时弹出填写数据对话框
+        protocol_cb.currentTextChanged.connect(partial(self._on_keymap_protocol_changed, index))
+
+        return item
+
+    def _on_keymap_protocol_changed(self, index, text):
+        """键盘映射中协议选择改变时弹出填写数据对话框"""
+        if text == '无' or not text:
+            return
+        # 选择协议后自动弹出填写对话框
+        self._show_keymap_value_dialog(index)
+
+    def _show_keymap_value_dialog(self, index):
+        """弹出键盘映射值填写对话框"""
+        if index >= len(self.keymap_widgets):
+            return
+
+        item = self.keymap_widgets[index]
+        protocol_name = item['protocol_cb'].currentText()
+
+        if protocol_name == '无' or not protocol_name:
+            QMessageBox.information(self, '提示', '请先选择协议')
+            return
+
+        # 从 all_protocols 或 protocols_loaded 中查找协议
+        protocol_data = None
+        for proto in getattr(self, 'all_protocols', []):
+            if proto.get('name') == protocol_name:
+                protocol_data = proto.get('data', {})
+                break
+
+        if not protocol_data:
+            for proto in getattr(self, 'protocols_loaded', []):
+                if proto.get('name') == protocol_name:
+                    protocol_data = proto.get('data', {})
+                    break
+
+        if not protocol_data:
+            return
+
+        # 获取协议的字段列表
+        fields = protocol_data.get('fields', [])
+        if not fields:
+            return
+
+        # 创建对话框让用户填写数据
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f'填写 {protocol_name} 协议数据')
+        dialog.setMinimumWidth(400)
+
+        layout = QVBoxLayout()
+
+        # 尝试解析当前已填写的值
+        current_text = item['value_edit'].text()
+        current_values = {}
+        if current_text:
+            try:
+                import json
+                current_values = json.loads(current_text)
+            except:
+                pass
+
+        # 为每个字段创建输入框
+        field_widgets = {}
+        for field in fields:
+            field_name = field.get('name', '')
+            field_type = field.get('type', 'uint8')
+            field_desc = field.get('description', '')
+
+            field_layout = QHBoxLayout()
+            label = QLabel(f'{field_name} ({field_type}):')
+            label.setMinimumWidth(120)
+            field_layout.addWidget(label)
+
+            if field_type in ('int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32'):
+                input_widget = QSpinBox()
+                input_widget.setRange(-2147483648, 2147483647)
+                # 如果有当前值则填入
+                if field_name in current_values:
+                    input_widget.setValue(int(current_values[field_name]))
+            elif field_type in ('float', 'double'):
+                input_widget = QDoubleSpinBox()
+                input_widget.setRange(-1e10, 1e10)
+                # 如果有当前值则填入
+                if field_name in current_values:
+                    input_widget.setValue(float(current_values[field_name]))
+            else:
+                input_widget = QLineEdit()
+                # 如果有当前值则填入
+                if field_name in current_values:
+                    input_widget.setText(str(current_values[field_name]))
+
+            field_layout.addWidget(input_widget)
+            layout.addLayout(field_layout)
+
+            field_widgets[field_name] = input_widget
+
+        # 添加按钮
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton('确定')
+        btn_cancel = QPushButton('取消')
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+
+        dialog.setLayout(layout)
+
+        btn_ok.clicked.connect(dialog.accept)
+        btn_cancel.clicked.connect(dialog.reject)
+
+        if dialog.exec_() == QDialog.Accepted:
+            # 收集填写的数据
+            values = {}
+            for field in fields:
+                field_name = field.get('name', '')
+                if field_name in field_widgets:
+                    widget = field_widgets[field_name]
+                    if isinstance(widget, QSpinBox) or isinstance(widget, QDoubleSpinBox):
+                        values[field_name] = widget.value()
+                    else:
+                        values[field_name] = widget.text()
+
+            # 转换为 JSON 字符串填入输入框
+            import json
+            item['value_edit'].setText(json.dumps(values, ensure_ascii=False))
+
+    def _start_capture_key(self, index):
+        """开始捕获键盘按键"""
+        if index >= len(self.keymap_widgets):
+            return
+
+        item = self.keymap_widgets[index]
+        btn = item['capture_btn']
+        btn.setText('请按键...')
+        btn.setEnabled(False)
+
+        # 创建对话框捕获按键
+        dialog = QDialog(self)
+        dialog.setWindowTitle('捕获按键')
+        dialog.setModal(True)
+        dialog.setFixedSize(300, 100)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel('请按下要绑定的键盘按键...'))
+        layout.addWidget(QLabel('(按 ESC 取消绑定)'))
+        dialog.setLayout(layout)
+
+        # 安装事件过滤器
+        dialog.keyPressEvent = lambda event: self._on_key_captured(index, event, dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_key_captured(self, index, event, dialog):
+        """按键被捕获"""
+        dialog.close()
+
+        if index >= len(self.keymap_widgets):
+            return
+
+        item = self.keymap_widgets[index]
+        key = event.key()
+
+        # ESC 取消绑定
+        if key == 16777216:  # Qt.Key_Escape
+            item['key_label'].setText('未绑定')
+            item['key'] = None
+            item['key_code'] = None
+            item['capture_btn'].setText('点击捕获')
+            item['capture_btn'].setEnabled(True)
+            return
+
+        # 获取按键名称
+        from PyQt5.QtCore import Qt
+        key_name = self._get_key_name(key)
+
+        item['key'] = key_name
+        item['key_code'] = key
+        item['key_label'].setText(key_name)
+        item['capture_btn'].setText('点击捕获')
+        item['capture_btn'].setEnabled(True)
+
+    def _get_key_name(self, key):
+        """获取按键的显示名称"""
+        from PyQt5.QtCore import Qt
+
+        # 功能键
+        if 16777264 <= key <= 16777271:  # F1-F8
+            return f'F{key - 16777263}'
+        # 数字键
+        if 48 <= key <= 57:
+            return chr(key)
+        # 字母键
+        if 65 <= key <= 90:
+            return chr(key)
+        # 其他特殊键
+        key_names = {
+            16777216: 'ESC',
+            16777220: 'Enter',
+            16777221: 'Enter',
+            16777219: 'Backspace',
+            16777238: 'Up',
+            16777239: 'Down',
+            16777236: 'Right',
+            16777234: 'Left',
+            32: 'Space',
+            16777248: 'Shift',
+            16777249: 'Ctrl',
+            16777250: 'Alt',
+            16777251: 'AltGr',
+        }
+        return key_names.get(key, f'Key{key}')
+
+    def _test_keymap_send(self, index):
+        """测试发送键盘映射的数据"""
+        if index >= len(self.keymap_widgets):
+            return
+
+        item = self.keymap_widgets[index]
+        if not item['enable'].isChecked():
+            QMessageBox.warning(self, '提示', '请先启用该键盘映射')
+            return
+
+        protocol_name = item['protocol_cb'].currentText()
+        value_text = item['value_edit'].text()
+
+        if protocol_name == '无':
+            # 发送原始值
+            if value_text:
+                encoding = 'gbk' if hasattr(self, 'send_encoding_cb') else 'utf-8'
+                send_bytes = value_text.encode(encoding, errors='replace')
+                self.send_data(send_bytes)
+            else:
+                QMessageBox.warning(self, '提示', '请输入要发送的值')
+        else:
+            # 使用协议发送
+            self._send_keymap_protocol(index, protocol_name, value_text)
+
+    def _send_keymap_protocol(self, index, protocol_name, value_text):
+        """通过协议发送键盘映射数据"""
+        # 查找协议数据
+        protocol_data = None
+        # 先从 protocols_loaded 查找
+        for proto in getattr(self, 'protocols_loaded', []):
+            if proto.get('name') == protocol_name:
+                protocol_data = proto.get('data')
+                break
+        # 再从 all_protocols 查找
+        if not protocol_data:
+            for proto in getattr(self, 'all_protocols', []):
+                if proto.get('name') == protocol_name:
+                    protocol_data = proto.get('data')
+                    break
+
+        if not protocol_data:
+            QMessageBox.warning(self, '错误', f'未找到协议: {protocol_name}')
+            return
+
+        # 如果有输入值，尝试编码
+        if value_text:
+            try:
+                # 根据协议字段类型构造数据
+                fields = protocol_data.get('fields', [])
+                field_data = {}
+
+                # 解析输入值（支持JSON格式）
+                try:
+                    # 尝试解析JSON格式
+                    import json
+                    field_data = json.loads(value_text)
+                    log.debug(f'_send_keymap_protocol: parsed JSON, field_data={field_data}')
+                except json.JSONDecodeError:
+                    # JSON解析失败，尝试逗号分隔格式
+                    values = value_text.split(',')
+                    log.debug(f'_send_keymap_protocol: parsed comma-separated, values={values}')
+                    for i, field in enumerate(fields):
+                        field_name = field.get('name', f'field{i}')
+                        field_type = field.get('type', 'int')
+
+                        if i < len(values):
+                            val_str = values[i].strip()
+                            if field_type == 'char':
+                                char_len = field.get('length', 1)
+                                field_data[field_name] = val_str[:char_len].ljust(char_len, '\0')
+                            else:
+                                try:
+                                    field_data[field_name] = int(val_str)
+                                except:
+                                    field_data[field_name] = 0
+                        else:
+                            field_data[field_name] = 0 if field_type != 'char' else ''
+
+                log.debug(f'_send_keymap_protocol: field_data={field_data}')
+
+                # 编码数据
+                packet = self._encode_packet_by_protocol(protocol_data, field_data)
+                if packet:
+                    self.send_data(packet)
+                else:
+                    QMessageBox.warning(self, '错误', '编码失败')
+            except Exception as e:
+                QMessageBox.warning(self, '错误', f'发送失败: {e}')
+        else:
+            # 发送空数据（使用协议默认值）
+            packet = self._encode_packet_by_protocol(protocol_data, {})
+            if packet:
+                self.send_data(packet)
+
+    def _encode_packet_by_protocol(self, protocol_data, field_data):
+        """根据协议编码数据（使用与_build_packet相同的逻辑）"""
+        try:
+            log.debug(f'_encode_packet_by_protocol: field_data={field_data}')
+
+            # 将 field_data 转换为 field_values 格式 [(name, type, value), ...]
+            field_values = []
+            for field in protocol_data.get('fields', []):
+                field_name = field.get('name', '')
+                field_type = field.get('type', 'int')
+                value = field_data.get(field_name, 0)
+                field_values.append((field_name, field_type, value))
+
+            log.debug(f'_encode_packet_by_protocol: field_values={field_values}')
+
+            # 使用 _build_packet 构建数据包
+            packet = self._build_packet(protocol_data, field_values)
+            return packet
+
+        except Exception as e:
+            log.error(f'协议编码失败: {e}')
+            return None
+
+    def _handle_keymap_keypress(self, event):
+        """处理键盘映射按键事件"""
+        if not hasattr(self, 'keymap_widgets') or not self.keymap_widgets:
+            return
+
+        key = event.key()
+        modifiers = event.modifiers()
+
+        for i, item in enumerate(self.keymap_widgets):
+            if not item['enable'].isChecked():
+                continue
+
+            if item['key_code'] == key:
+                # 检查修饰键
+                key_name = item['key']
+                if key_name:
+                    # F1-F8 需要检查是否有修饰键
+                    if key_name.startswith('F') and (modifiers & Qt.ControlModifier):
+                        # Ctrl+F1 等
+                        self._test_keymap_send(i)
+                        event.accept()
+                        return
+                    elif not key_name.startswith('F') and not key_name.startswith('Ctrl'):
+                        # 普通按键直接触发
+                        self._test_keymap_send(i)
+                        event.accept()
+                        return
+                    elif key_name.startswith('F'):
+                        # F1-F8 无修饰键触发
+                        self._test_keymap_send(i)
+                        event.accept()
+                        return
 
     def refresh_ports(self):
         """刷新可用串口列表"""
@@ -2011,24 +2957,76 @@ class JsonEditor(QMainWindow):
             if hasattr(self, 'oscillo_window') and self.oscillo_window and self.oscillo_window.isVisible():
                 self.oscillo_window.receive_serial_data(data)
 
-    def send_data(self):
-        """发送数据"""
+    def send_data(self, data=None):
+        """发送数据
+
+        Args:
+            data: 可选的字节数据，如果为None则从发送文本框读取
+        """
         if not self.serial or not self.serial.is_open:
             return
 
+        # 如果传入了数据（字节形式），直接发送
+        if data is not None:
+            # 确保 data 是字节类型
+            if isinstance(data, bool):
+                log.error(f'发送数据是布尔值: {data}')
+                QMessageBox.warning(self, '错误', '发送数据格式错误')
+                return
+            if not isinstance(data, (bytes, bytearray)):
+                try:
+                    data = bytes(data)
+                except Exception as e:
+                    log.error(f'发送数据转换失败: {e}, type={type(data)}')
+                    QMessageBox.warning(self, '错误', f'发送数据格式错误: {e}')
+                    return
+
+            try:
+                self.serial.write(data)
+                self.send_counter += len(data)
+                self.send_count.setText(str(self.send_counter))
+                # 显示发送的字节数
+                self.recv_text.append(f'[发送 {len(data)} 字节]')
+                return
+            except Exception as e:
+                log.error(f'发送失败: {e}')
+                QMessageBox.warning(self, '错误', f'发送失败: {e}')
+                return
+
+        # 否则从发送文本框读取
         text = self.send_text.toPlainText()
         if not text:
             return
 
         try:
-            if self.rb_hex_send.isChecked():
-                data = bytes.fromhex(text.replace(' ', ''))
+            if hasattr(self, 'rb_hex_send') and self.rb_hex_send.isChecked():
+                # 十六进制发送模式
+                hex_str = text.replace(' ', '').replace('\n', '').replace('\r', '')
+                if not hex_str:
+                    QMessageBox.warning(self, '错误', '请输入有效的十六进制数据')
+                    return
+                try:
+                    data = bytes.fromhex(hex_str)
+                except ValueError as e:
+                    QMessageBox.warning(self, '错误', f'十六进制格式错误: {e}')
+                    return
             else:
-                encoding = self.send_encoding_cb.currentText()
+                # 文本发送模式
+                encoding = getattr(self, 'send_encoding_cb', None)
+                if encoding:
+                    encoding = encoding.currentText()
+                else:
+                    encoding = 'gbk'
                 try:
                     data = text.encode(encoding)
                 except:
-                    data = text.encode('utf-8')
+                    data = text.encode('utf-8', errors='replace')
+
+            # 确保 data 是字节类型
+            if not isinstance(data, (bytes, bytearray)):
+                log.error(f'发送数据不是字节类型: type={type(data)}, data={data}')
+                QMessageBox.warning(self, '错误', '发送数据格式错误')
+                return
 
             self.serial.write(data)
             self.send_counter += len(data)
@@ -2052,21 +3050,18 @@ class JsonEditor(QMainWindow):
                 self.loop_timer = None
             self.loop_interval.setEnabled(False)
 
-    # ========== 协议调试功能 ==========
-    def scan_protocols_folder(self):
-        """扫描协议文件夹，添加所有JSON协议文件到下拉列表"""
-        # 如果输入框有路径则使用，否则弹出文件夹选择对话框
-        folder_path = self.protocol_folder_edit.text().strip()
+    # ========== 协议扫描功能 ==========
+    def scan_all_protocols_folder(self):
+        """扫描协议文件夹，加载所有协议供全局共享使用"""
+        # 弹出文件夹选择对话框
+        folder_path = QFileDialog.getExistingDirectory(
+            self, '选择协议文件夹', ''
+        )
         if not folder_path:
-            folder_path = QFileDialog.getExistingDirectory(
-                self, '选择协议文件夹', ''
-            )
-            if not folder_path:
-                return
-            self.protocol_folder_edit.setText(folder_path)
+            return
 
         if not os.path.isdir(folder_path):
-            QMessageBox.warning(self, '警告', '请输入有效的文件夹路径')
+            QMessageBox.warning(self, '警告', '请选择有效的文件夹路径')
             return
 
         # 扫描文件夹中的所有JSON文件
@@ -2080,37 +3075,89 @@ class JsonEditor(QMainWindow):
             QMessageBox.information(self, '提示', '未找到任何JSON协议文件')
             return
 
-        # 加载所有协议文件
+        # 初始化全局协议列表
+        if not hasattr(self, 'all_protocols'):
+            self.all_protocols = []  # {'path': str, 'name': str, 'data': dict}
+
         loaded_count = 0
+        existing_paths = [proto['path'] for proto in self.all_protocols]
+
         for file_path in json_files:
+            if file_path in existing_paths:
+                continue
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     protocol = json.load(f)
 
-                # 保存协议配置
-                if not hasattr(self, 'debug_protocols'):
-                    self.debug_protocols = {}
-                if not hasattr(self, 'debug_protocols_paths'):
-                    self.debug_protocols_paths = {}
+                # 获取协议名称
+                struct_name = protocol.get('structName', '')
+                display_name = struct_name if struct_name else os.path.basename(file_path)
 
-                struct_name = protocol.get('structName', os.path.basename(file_path))
-                # 避免重复添加
-                if struct_name not in self.debug_protocols:
-                    self.debug_protocols[struct_name] = protocol
-                    self.debug_protocols_paths[struct_name] = file_path
-                    self.debug_protocol_cb.addItem(struct_name)
-                    loaded_count += 1
+                self.all_protocols.append({
+                    'path': file_path,
+                    'name': display_name,
+                    'data': protocol
+                })
+                loaded_count += 1
             except Exception as e:
                 log.warning(f'加载协议文件失败 {file_path}: {e}')
 
         if loaded_count > 0:
-            # 自动选择第一个协议并加载表格
-            if self.debug_protocol_cb.count() > 0:
-                first_protocol = self.debug_protocol_cb.itemText(0)
-                self.debug_protocol_cb.setCurrentText(first_protocol)
-            QMessageBox.information(self, '完成', f'成功加载 {loaded_count} 个协议文件')
+            # 更新所有协议下拉框
+            self._update_all_protocol_combos()
+            QMessageBox.information(self, '完成', f'成功加载 {loaded_count} 个协议文件\n所有模块现已可以使用这些协议')
         else:
             QMessageBox.information(self, '提示', '没有新的协议文件需要加载')
+
+    def _update_all_protocol_combos(self):
+        """更新所有协议下拉框"""
+        if not hasattr(self, 'all_protocols'):
+            return
+
+        protocol_names = ['无'] + [p['name'] for p in self.all_protocols]
+
+        # 更新调试模块的协议下拉框
+        if hasattr(self, 'debug_protocol_cb'):
+            current = self.debug_protocol_cb.currentText()
+            self.debug_protocol_cb.blockSignals(True)
+            self.debug_protocol_cb.clear()
+            for proto in self.all_protocols:
+                self.debug_protocol_cb.addItem(proto['name'])
+            # 尝试恢复之前的选择
+            if current in protocol_names:
+                self.debug_protocol_cb.setCurrentText(current)
+            self.debug_protocol_cb.blockSignals(False)
+
+        # 更新帧解析模块的协议下拉框
+        if hasattr(self, 'protocol_cb'):
+            current = self.protocol_cb.currentText()
+            self.protocol_cb.blockSignals(True)
+            self.protocol_cb.clear()
+            self.protocol_cb.addItems(protocol_names)
+            # 尝试恢复之前的选择
+            if current in protocol_names:
+                self.protocol_cb.setCurrentText(current)
+            self.protocol_cb.blockSignals(False)
+
+        # 更新键盘映射中的协议下拉框
+        if hasattr(self, 'keymap_widgets'):
+            for item in self.keymap_widgets:
+                current = item['protocol_cb'].currentText()
+                item['protocol_cb'].blockSignals(True)
+                item['protocol_cb'].clear()
+                item['protocol_cb'].addItems(protocol_names)
+                if current in protocol_names:
+                    item['protocol_cb'].setCurrentText(current)
+                item['protocol_cb'].blockSignals(False)
+
+        # 更新已加载的协议列表（供配置保存使用）
+        self.protocols_loaded = self.all_protocols
+
+    # ========== 协议调试功能 ==========
+    def scan_protocols_folder(self):
+        """扫描协议文件夹（已弃用，请使用串口配置的"扫描协议"按钮）"""
+        # 重定向到新的统一扫描函数
+        self.scan_all_protocols_folder()
 
     def load_debug_protocol(self):
         """加载协议文件到调试表格"""
@@ -2277,14 +3324,17 @@ class JsonEditor(QMainWindow):
         else:
             header_int = int(header_val)
 
-        footer_val = protocol.get('footer', 0x55)
-        if isinstance(footer_val, str):
-            if footer_val.startswith('0x') or footer_val.startswith('0X'):
-                footer_int = int(footer_val, 16)
+        footer_val = protocol.get('footer', None)
+        if footer_val is not None:
+            if isinstance(footer_val, str):
+                if footer_val.startswith('0x') or footer_val.startswith('0X'):
+                    footer_int = int(footer_val, 16)
+                else:
+                    footer_int = int(footer_val)
             else:
                 footer_int = int(footer_val)
         else:
-            footer_int = int(footer_val)
+            footer_int = None
 
         verify = protocol.get('verify', 'none')
         align = protocol.get('align', 1)
@@ -2292,71 +3342,151 @@ class JsonEditor(QMainWindow):
         # 处理 header_len, footer_len, data_len
         header_len = protocol.get('header_len', 1)
         footer_len = protocol.get('footer_len', 1)
-        has_data_len = protocol.get('data_len', False)
+        has_data_len = protocol.get('data_len', True)
 
-        # 根据 header_len 取 header 的不同字节（小端序）
+        # data_len 详细配置
+        data_len_mode = protocol.get('data_len_mode', 'data_only')  # data_only, with_checksum, full_frame
+        dl_include_header = protocol.get('data_len_include_header', False)
+        dl_include_footer = protocol.get('data_len_include_footer', False)
+        dl_include_checksum = protocol.get('data_len_include_checksum', True)
+
+        # 校验和计算范围
+        checksum_range = protocol.get('checksum_range', 'data_only')  # data_only, with_datalen
+
+        # 获取字节序配置
+        endian = protocol.get('endian', 'little')
+        endian_str = '<' if endian == 'little' else '>'
+        log.debug(f'_build_packet: endian={endian}, endian_str={endian_str}, header={header_int} (0x{header_int:04X}), header_len={header_len}')
+
+        # 根据 header_len 和字节序取 header 的不同字节
         header_bytes = []
-        for i in range(header_len):
-            header_bytes.append((header_int >> (i * 8)) & 0xFF)
+        if endian == 'big':
+            # 大端序：高位字节在前
+            for i in range(header_len - 1, -1, -1):
+                header_bytes.append((header_int >> (i * 8)) & 0xFF)
+        else:
+            # 小端序：低位字节在前
+            for i in range(header_len):
+                header_bytes.append((header_int >> (i * 8)) & 0xFF)
         packet = bytes(header_bytes)
 
-        # 如果有 data_len 字段，先添加占位（2字节）
-        if has_data_len:
-            packet += bytes(2)
-
         # 先添加所有字段数据
-        payload_start = len(packet)
+        data_start_pos = len(packet)
         for fname, ftype, value in field_values:
             if ftype == 'int':
-                packet += struct.pack('<i', int(value))
+                packet += struct.pack(endian_str + 'i', int(value))
             elif ftype == 'uint8':
-                packet += struct.pack('<B', int(value) & 0xFF)
+                packet += struct.pack('B', int(value) & 0xFF)
             elif ftype == 'uint16':
-                packet += struct.pack('<H', int(value) & 0xFFFF)
+                packet += struct.pack(endian_str + 'H', int(value) & 0xFFFF)
             elif ftype == 'int8':
-                packet += struct.pack('<b', int(value))
+                packet += struct.pack('b', int(value))
             elif ftype == 'int16':
-                packet += struct.pack('<h', int(value))
+                packet += struct.pack(endian_str + 'h', int(value))
             elif ftype == 'float':
-                packet += struct.pack('<f', float(value))
+                packet += struct.pack(endian_str + 'f', float(value))
             elif ftype == 'bool':
-                packet += struct.pack('<?', bool(value))
+                packet += struct.pack('?', bool(value))
             elif ftype == 'char':
                 packet += bytes(value)
 
-        # 计算实际数据长度并更新 data_len 字段
+        # 保存数据部分（不含header和可能的footer）
+        data_part = packet[header_len:]
+
+        # 添加 footer
+        footer_bytes = b''
+        if footer_int is not None:
+            if endian == 'big':
+                for i in range(footer_len - 1, -1, -1):
+                    footer_bytes += bytes([(footer_int >> (i * 8)) & 0xFF])
+            else:
+                for i in range(footer_len):
+                    footer_bytes += bytes([(footer_int >> (i * 8)) & 0xFF])
+
+        # 计算 data_len（先计算，用于校验和计算）
         if has_data_len:
-            payload_length = len(packet) - payload_start
-            # 更新 data_len 位置
-            data_len_bytes = payload_length.to_bytes(2, 'little')
-            packet = packet[:payload_start] + data_len_bytes + packet[payload_start:]
-
-        # 计算校验
-        if verify == 'sum':
-            checksum = sum(packet[1:]) & 0xFF
-            packet += bytes([checksum])
-        elif verify == 'xor':
-            checksum = 0
-            for b in packet[1:]:
-                checksum ^= b
-            packet += bytes([checksum])
-        elif verify == 'crc8':
-            checksum = self._calc_crc8(packet[1:])
-            packet += bytes([checksum])
-        elif verify == 'crc16':
-            checksum = self._calc_crc16(packet[1:])
-            # CRC16 是 2 字节，需要分开高低字节
-            packet += bytes([checksum & 0xFF, (checksum >> 8) & 0xFF])
+            # 根据模式计算长度
+            if data_len_mode == 'data_only':
+                data_len = len(data_part)
+            elif data_len_mode == 'with_checksum':
+                # 先估算校验和长度（假设1字节）
+                data_len = len(data_part) + 1
+            elif data_len_mode == 'full_frame':
+                # full_frame 模式：计算完整帧长度
+                # 长度 = data_len本身(1) + data + 校验和(1)
+                # 加上 header 如果需要包含
+                data_len = 1 + len(data_part) + 1
+                if dl_include_header:
+                    data_len += header_len
+                if dl_include_footer:
+                    data_len += len(footer_bytes)
+            else:
+                data_len = len(data_part)
         else:
-            # 无校验
-            pass
+            data_len = 0
 
-        # 添加 footer（根据 footer_len 取不同字节）
-        footer_bytes = []
-        for i in range(footer_len):
-            footer_bytes.append((footer_int >> (i * 8)) & 0xFF)
-        packet += bytes(footer_bytes)
+        # 记录初始 data_len 用于校验和计算
+        data_len_for_checksum = data_len
 
+        # 计算校验（根据 checksum_range 决定校验范围）
+        checksum_bytes = b''
+        checksum_data = data_part
+        if verify != 'none':
+            if checksum_range == 'with_datalen' and has_data_len:
+                # 包含 data_len（使用计算出的data_len值）
+                checksum_data = bytes([data_len_for_checksum & 0xFF]) + data_part
+            elif checksum_range == 'full_frame':
+                # 校验校验位之前的所有数据：header + data_len + data_part
+                checksum_data = bytes(header_bytes) + bytes([data_len_for_checksum & 0xFF]) + data_part
+                log.debug(f'_build_packet: full_frame checksum: header={bytes(header_bytes).hex().upper()}, data_len={data_len_for_checksum}, data_part={data_part.hex().upper()}, checksum_data={checksum_data.hex().upper()}')
+            if verify == 'sum':
+                checksum = sum(checksum_data) & 0xFF
+                log.debug(f'_build_packet: sum checksum calculated: checksum_data={checksum_data.hex().upper()}, checksum={checksum:02X}')
+                checksum_bytes = bytes([checksum])
+            elif verify == 'xor':
+                checksum = 0
+                for b in checksum_data:
+                    checksum ^= b
+                checksum_bytes = bytes([checksum])
+            elif verify == 'crc8':
+                checksum = self._calc_crc8(checksum_data)
+                checksum_bytes = bytes([checksum])
+            elif verify == 'crc16':
+                checksum = self._calc_crc16(checksum_data)
+                # CRC16 是 2 字节
+                checksum_bytes = bytes([checksum & 0xFF, (checksum >> 8) & 0xFF])
+
+        # 根据实际校验和长度调整 data_len（仅对 with_checksum 模式）
+        if has_data_len and data_len_mode == 'with_checksum':
+            # 重新计算包含实际校验和长度的 data_len
+            data_len = len(data_part) + len(checksum_bytes)
+
+        log.debug(f'_build_packet: data_len_mode={data_len_mode}, data_len={data_len}, checksum_len={len(checksum_bytes)}, dl_include_header={dl_include_header}, dl_include_footer={dl_include_footer}, dl_include_checksum={dl_include_checksum}')
+
+        # 根据include选项调整data_len
+        if has_data_len and data_len_mode != 'full_frame':
+            if dl_include_header:
+                data_len += header_len
+            if dl_include_footer:
+                data_len += len(footer_bytes)
+            if dl_include_checksum:
+                data_len += len(checksum_bytes)
+
+        # 构建最终packet：header + data_len + data + checksum + footer
+        if has_data_len:
+            # 在header后面插入data_len
+            packet = packet[:header_len] + bytes([data_len & 0xFF]) + packet[header_len:]
+            # 校验和追加
+            packet += checksum_bytes
+            # 帧尾最后追加
+            packet += footer_bytes
+        else:
+            # 校验和追加
+            packet += checksum_bytes
+            # 帧尾最后追加
+            packet += footer_bytes
+
+        log.debug(f'_build_packet result: {packet.hex().upper()} (len={len(packet)})')
         return packet
 
     def _calc_crc8(self, data):
@@ -2386,8 +3516,23 @@ class JsonEditor(QMainWindow):
 
     def on_debug_protocol_changed(self, protocol_name):
         """协议选择改变"""
+        protocol = None
+
+        # 首先从 debug_protocols 查找（手动加载的协议）
         if hasattr(self, 'debug_protocols') and protocol_name in self.debug_protocols:
             protocol = self.debug_protocols[protocol_name]
+        # 其次从 all_protocols 查找（扫描的协议）
+        elif hasattr(self, 'all_protocols'):
+            for p in self.all_protocols:
+                if p.get('name') == protocol_name:
+                    protocol = p.get('data', {})
+                    break
+
+        if protocol:
+            # 确保协议也存入 debug_protocols 以便后续使用
+            if not hasattr(self, 'debug_protocols'):
+                self.debug_protocols = {}
+            self.debug_protocols[protocol_name] = protocol
             self.populate_debug_table(protocol)
 
     def on_debug_loop_changed(self, state):
@@ -2563,67 +3708,9 @@ class JsonEditor(QMainWindow):
         self.parse_result.clear()
 
     def scan_protocols_folder_for_parse(self):
-        """扫描协议文件夹，添加所有JSON协议文件到帧解析下拉列表"""
-        # 如果输入框有路径则使用，否则弹出文件夹选择对话框
-        folder_path = self.protocol_folder_edit_parse.text().strip()
-        if not folder_path:
-            folder_path = QFileDialog.getExistingDirectory(
-                self, '选择协议文件夹', ''
-            )
-            if not folder_path:
-                return
-            self.protocol_folder_edit_parse.setText(folder_path)
-
-        if not os.path.isdir(folder_path):
-            QMessageBox.warning(self, '警告', '请输入有效的文件夹路径')
-            return
-
-        # 扫描文件夹中的所有JSON文件
-        json_files = []
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                if file.endswith('.json'):
-                    json_files.append(os.path.join(root, file))
-
-        if not json_files:
-            QMessageBox.information(self, '提示', '未找到任何JSON协议文件')
-            return
-
-        # 加载所有协议文件
-        loaded_count = 0
-        for file_path in json_files:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    proto_data = json.load(f)
-
-                # 保存到协议列表
-                if not hasattr(self, 'protocols_loaded'):
-                    self.protocols_loaded = []
-
-                display_name = os.path.basename(file_path)
-                # 避免重复添加
-                existing_paths = [proto['path'] for proto in self.protocols_loaded]
-                if file_path not in existing_paths:
-                    self.protocols_loaded.append({
-                        'path': file_path,
-                        'name': display_name,
-                        'data': proto_data
-                    })
-                    # 添加到协议选择下拉框
-                    if hasattr(self, 'protocol_cb'):
-                        self.protocol_cb.addItem(display_name)
-                    loaded_count += 1
-            except Exception as e:
-                log.warning(f'加载协议文件失败 {file_path}: {e}')
-
-        if loaded_count > 0:
-            # 自动选择第一个协议
-            if hasattr(self, 'protocol_cb') and self.protocol_cb.count() > 0:
-                first_protocol = self.protocol_cb.itemText(0)
-                self.protocol_cb.setCurrentText(first_protocol)
-            QMessageBox.information(self, '完成', f'成功加载 {loaded_count} 个协议文件')
-        else:
-            QMessageBox.information(self, '提示', '没有新的协议文件需要加载')
+        """扫描协议文件夹（已弃用，请使用串口配置的"扫描协议"按钮）"""
+        # 重定向到新的统一扫描函数
+        self.scan_all_protocols_folder()
 
     def load_protocol(self):
         """加载协议文件"""
@@ -2668,6 +3755,25 @@ class JsonEditor(QMainWindow):
                 self.protocol_cb.addItem(display_name)
             self.protocol_cb.setCurrentText(display_name)
 
+            # 更新键盘映射中的协议下拉框
+            self._update_keymap_protocols()
+
+    def _update_keymap_protocols(self):
+        """更新键盘映射中的协议下拉框"""
+        if not hasattr(self, 'keymap_widgets'):
+            return
+
+        protocol_names = ['无'] + [p.get('name', '未命名') for p in getattr(self, 'protocols_loaded', [])]
+
+        for item in self.keymap_widgets:
+            current = item['protocol_cb'].currentText()
+            item['protocol_cb'].clear()
+            item['protocol_cb'].addItems(protocol_names)
+            if current in protocol_names:
+                item['protocol_cb'].setCurrentText(current)
+            elif '无' in protocol_names:
+                item['protocol_cb'].setCurrentText('无')
+
     def on_protocol_changed(self, text):
         """协议选择改变时更新内容显示"""
         if text == '无':
@@ -2695,10 +3801,22 @@ class JsonEditor(QMainWindow):
         else:
             self.protocol_content.clear()
 
+    def get_current_endian(self):
+        """获取当前选择的字节序"""
+        if hasattr(self, 'endian_cb'):
+            if self.endian_cb.currentText().startswith('小端'):
+                return 'little'  # 小端: 低字节在前
+            else:
+                return 'big'  # 大端: 高字节在前
+        return 'little'  # 默认小端
+
     def parse_frame(self, data):
         """解析帧数据，支持多协议"""
         if not hasattr(self, 'protocols_loaded') or not self.protocols_loaded:
             return
+
+        # 获取当前字节序
+        endian = self.get_current_endian()
 
         # 检查是否启用多协议自动解析
         if hasattr(self, 'chk_multi_protocol') and self.chk_multi_protocol.isChecked():
@@ -2709,25 +3827,27 @@ class JsonEditor(QMainWindow):
             if current_protocol != '无':
                 for proto in self.protocols_loaded:
                     if proto['name'] == current_protocol:
-                        result = self._decode_packet(data, proto['data'])
+                        result = self._decode_packet(data, proto['data'], endian)
                         if result:
                             self._show_parse_result(result, proto['name'])
                         break
 
     def _parse_single_protocol(self, data, protocol_name):
         """单协议解析"""
+        endian = self.get_current_endian()
         for proto in self.protocols_loaded:
             if proto['name'] == protocol_name:
-                result = self._decode_packet(data, proto['data'])
+                result = self._decode_packet(data, proto['data'], endian)
                 if result:
                     self._show_parse_result(result, proto['name'])
                 break
 
     def _parse_multi_protocol(self, data):
         """多协议自动解析"""
+        endian = self.get_current_endian()
         results = []
         for proto in self.protocols_loaded:
-            result = self._decode_packet(data, proto['data'])
+            result = self._decode_packet(data, proto['data'], endian)
             if result:
                 results.append((proto['name'], result))
 
@@ -2740,17 +3860,31 @@ class JsonEditor(QMainWindow):
                 output.append("")
             self.parse_result.setPlainText("\n".join(output))
 
-    def _decode_packet(self, data, proto_data):
+    def _decode_packet(self, data, proto_data, endian='little'):
         """根据协议解析数据"""
         try:
+            # 优先使用协议文件中定义的字节序，否则使用传入的字节序
+            proto_endian = proto_data.get('endian', '')
+            if proto_endian:
+                endian = proto_endian
+
             header = proto_data.get('header')
             header_len = proto_data.get('header_len', 1)
             footer = proto_data.get('footer')
             footer_len = proto_data.get('footer_len', 1)
             data_len_enabled = proto_data.get('data_len', True)
+            verify = proto_data.get('verify', 'none')  # 获取校验类型
             align = proto_data.get('align', 1)  # 获取对齐参数
             fields = proto_data.get('fields', [])
             struct_name = proto_data.get('structName', 'Unknown')
+
+            # 计算校验和长度
+            checksum_size = 0
+            if verify and verify != 'none':
+                if verify in ('xor', 'sum', 'CRC8'):
+                    checksum_size = 1
+                elif verify == 'CRC16':
+                    checksum_size = 2
 
             # 计算字段总长度（考虑对齐）
             field_size = 0
@@ -2775,7 +3909,7 @@ class JsonEditor(QMainWindow):
 
             # 计算数据包最小长度
             data_len_size = 1 if data_len_enabled else 0
-            min_len = header_len + data_len_size + field_size + 1 + footer_len  # header + data_len + payload + checksum + footer
+            min_len = header_len + data_len_size + field_size + checksum_size + footer_len  # header + data_len + payload + checksum + footer
 
             # 检查是否有帧头
             if header is not None:
@@ -2824,7 +3958,7 @@ class JsonEditor(QMainWindow):
                     break
 
                 if ftype == 'int':
-                    value = int.from_bytes(data[offset:offset+4], 'little', signed=False)
+                    value = int.from_bytes(data[offset:offset+4], endian, signed=False)
                     result[fname] = value
                     offset += 4
                     field_offset += 4
@@ -2840,18 +3974,20 @@ class JsonEditor(QMainWindow):
                     offset += 1
                     field_offset += 1
                 elif ftype == 'uint16':
-                    value = int.from_bytes(data[offset:offset+2], 'little', signed=False)
+                    value = int.from_bytes(data[offset:offset+2], endian, signed=False)
                     result[fname] = value
                     offset += 2
                     field_offset += 2
                 elif ftype == 'int16':
-                    value = int.from_bytes(data[offset:offset+2], 'little', signed=True)
+                    value = int.from_bytes(data[offset:offset+2], endian, signed=True)
                     result[fname] = value
                     offset += 2
                     field_offset += 2
                 elif ftype == 'float':
                     import struct
-                    value = struct.unpack('f', data[offset:offset+4])[0]
+                    # 根据字节序选择格式符
+                    endian_str = '<' if endian == 'little' else '>'
+                    value = struct.unpack(endian_str + 'f', data[offset:offset+4])[0]
                     result[fname] = round(value, 4)
                     offset += 4
                     field_offset += 4
@@ -2994,6 +4130,35 @@ class JsonEditor(QMainWindow):
         self.protocol_window.show()
         self.protocol_window.activateWindow()
 
+    def edit_current_protocol(self):
+        """编辑当前选中的协议文件"""
+        current_protocol = self.protocol_cb.currentText()
+        log.debug(f'edit_current_protocol: last_struct_config={getattr(self, "last_struct_config", "NOT SET")}')
+
+        # 优先使用上次保存的结构体配置文件
+        protocol_path = None
+        if hasattr(self, 'last_struct_config') and self.last_struct_config:
+            if os.path.exists(self.last_struct_config):
+                protocol_path = self.last_struct_config
+                log.debug(f'edit_current_protocol: using last_struct_config={protocol_path}')
+
+        # 如果没有使用上次的配置，则查找当前协议的路径
+        if not protocol_path and current_protocol != '无':
+            if hasattr(self, 'protocols_loaded'):
+                for proto in self.protocols_loaded:
+                    if proto.get('name') == current_protocol:
+                        protocol_path = proto.get('path')
+                        break
+
+        if not protocol_path or not os.path.exists(protocol_path):
+            # 如果还是没有找到，使用默认配置
+            protocol_path = default_json_path()
+
+        # 打开 JsonEditor 窗口，传入 self 作为父窗口
+        from qt_json_editor import JsonEditor
+        self.protocol_editor = JsonEditor(protocol_path, parent_window=self)
+        self.protocol_editor.show()
+
     def popup_terminal_window(self):
         """弹出终端独立窗口"""
         # 创建新窗口
@@ -3011,8 +4176,26 @@ def main():
     except Exception:
         log.exception('Failed to create QApplication')
         raise
-    p = default_json_path()
-    editor = JsonEditor(p)
+
+    # 尝试加载上次的配置文件
+    json_path = None
+    try:
+        config_path = config_file_path()
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                last_struct = config.get('last_struct_config', '')
+                if last_struct and os.path.exists(last_struct):
+                    json_path = last_struct
+                    log.debug(f'main: using last_struct_config={json_path}')
+    except Exception as e:
+        log.warning(f'main: failed to load last_struct_config: {e}')
+
+    # 如果没有上次的配置，使用默认配置
+    if not json_path:
+        json_path = default_json_path()
+
+    editor = JsonEditor(json_path)
     editor.show()
     try:
         rc = app.exec_()

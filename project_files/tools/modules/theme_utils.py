@@ -1,5 +1,6 @@
 """共享工具函数"""
 
+from PyQt5.QtCore import QObject
 from PyQt5.QtWidgets import QWidget
 
 
@@ -59,3 +60,25 @@ def get_theme_from_parent(parent_window, default='dark'):
     if parent_window and hasattr(parent_window, 'loaded_theme'):
         return parent_window.loaded_theme
     return default
+
+
+class JsonEditorEventFilter(QObject):
+    """JsonEditor 事件过滤器，用于捕获键盘映射按键"""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent_window = parent
+        parent.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """过滤键盘事件"""
+        from PyQt5.QtCore import QEvent
+        from PyQt5.QtGui import QKeyEvent
+
+        if event.type() == QEvent.KeyPress:
+            # 检查是否是键盘映射按键
+            if hasattr(self.parent_window, '_handle_keymap_keypress'):
+                self.parent_window._handle_keymap_keypress(event)
+                if event.isAccepted():
+                    return True
+        return False

@@ -1,12 +1,12 @@
 {
   "window_geometry": [
-    506,
-    209,
-    1182,
-    1000
+    410,
+    63,
+    809,
+    565
   ],
-  "theme": "暗色主题",
-  "serial_port": "COM21",
+  "theme": "亮色主题",
+  "serial_port": "COM15",
   "baudrate": "115200",
   "databits": "8",
   "stopbits": "1",
@@ -18,136 +18,134 @@
   "auto_scroll": true,
   "auto_parse": true,
   "show_config": true,
-  "show_send": false,
+  "show_send": true,
   "show_recv": true,
   "show_terminal": false,
   "show_debug": false,
   "show_parse": true,
   "show_oscillo": false,
+  "show_keymap": false,
+  "endian": "小端 (Little Endian)",
+  "keymap": [
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    },
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    },
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    },
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    },
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    },
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    },
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    },
+    {
+      "enabled": false,
+      "key": null,
+      "key_code": null,
+      "protocol": "无",
+      "value": ""
+    }
+  ],
   "protocols_loaded": [
     {
-      "name": "struct_definition.json",
-      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples/struct_definition.json",
+      "path": "E:/ad_test/uart_all_in_one/examples/SHAOBING.json",
+      "name": "SHAOBING",
       "data": {
-        "structName": "CAR_Packet",
+        "structName": "SHAOBING",
         "fields": [
           {
-            "name": "STOP_FLAG",
+            "name": "ID",
             "type": "uint8"
           },
           {
-            "name": "VX",
-            "type": "int16"
-          },
-          {
-            "name": "VY",
-            "type": "int16"
-          },
-          {
-            "name": "VZ",
-            "type": "int16"
-          },
-          {
-            "name": "XA",
-            "type": "int16"
-          },
-          {
-            "name": "YA",
-            "type": "int16"
-          },
-          {
-            "name": "ZA",
-            "type": "int16"
-          },
-          {
-            "name": "X_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Y_angel",
-            "type": "int16"
-          },
-          {
-            "name": "Z_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Votage",
-            "type": "uint16"
-          }
-        ],
-        "verify": "xor",
-        "align": 1,
-        "header": 123,
-        "header_len": 1,
-        "footer": 125,
-        "footer_len": 1,
-        "data_len": false
-      }
-    },
-    {
-      "name": "CAR_Packet.json",
-      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples\\CAR_Packet.json",
-      "data": {
-        "structName": "CAR_Packet",
-        "fields": [
-          {
-            "name": "STOP_FLAG",
+            "name": "DATA_LEN",
             "type": "uint8"
           },
           {
+            "name": "BIG_YAW",
+            "type": "float"
+          },
+          {
+            "name": "PITCH",
+            "type": "float"
+          },
+          {
+            "name": "YAW",
+            "type": "float"
+          },
+          {
             "name": "VX",
-            "type": "int16"
+            "type": "float"
           },
           {
             "name": "VY",
-            "type": "int16"
+            "type": "float"
           },
           {
-            "name": "VZ",
-            "type": "int16"
+            "name": "WZ",
+            "type": "float"
           },
           {
-            "name": "XA",
-            "type": "int16"
-          },
-          {
-            "name": "YA",
-            "type": "int16"
-          },
-          {
-            "name": "ZA",
-            "type": "int16"
-          },
-          {
-            "name": "X_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Y_angel",
-            "type": "int16"
-          },
-          {
-            "name": "Z_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Votage",
-            "type": "uint16"
+            "name": "OFFYAW",
+            "type": "float"
           }
         ],
-        "verify": "xor",
+        "endian": "little",
+        "verify": "none",
         "align": 1,
-        "header": 123,
+        "header": 90,
         "header_len": 1,
-        "footer": 125,
-        "footer_len": 1,
-        "data_len": false
+        "footer": 65531,
+        "footer_len": 2,
+        "data_len": false,
+        "data_len_mode": "data_only",
+        "data_len_include_header": false,
+        "data_len_include_footer": false,
+        "data_len_include_checksum": false,
+        "checksum_range": "data_only"
       }
     },
     {
-      "name": "CAR_Packet_1.json",
-      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples\\CAR_Packet_1.json",
+      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples/CAR_Packet_1.json",
+      "name": "CAR_Packet_1",
       "data": {
         "structName": "CAR_Packet_1",
         "fields": [
@@ -196,24 +194,30 @@
             "type": "uint16"
           }
         ],
+        "endian": "little",
         "verify": "xor",
         "align": 1,
         "header": 123,
         "header_len": 1,
         "footer": 125,
         "footer_len": 1,
-        "data_len": false
+        "data_len": false,
+        "data_len_mode": "data_only",
+        "data_len_include_header": false,
+        "data_len_include_footer": false,
+        "data_len_include_checksum": true,
+        "checksum_range": "data_only"
       }
     },
     {
-      "name": "struct_definition.json",
-      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples\\struct_definition.json",
+      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples/CAR_send_Packet.json",
+      "name": "CAR_send_Packet",
       "data": {
-        "structName": "CAR_Packet",
+        "structName": "CAR_send_Packet",
         "fields": [
           {
-            "name": "STOP_FLAG",
-            "type": "uint8"
+            "name": "SAVE_FLAG",
+            "type": "uint16"
           },
           {
             "name": "VX",
@@ -226,105 +230,24 @@
           {
             "name": "VZ",
             "type": "int16"
-          },
-          {
-            "name": "XA",
-            "type": "int16"
-          },
-          {
-            "name": "YA",
-            "type": "int16"
-          },
-          {
-            "name": "ZA",
-            "type": "int16"
-          },
-          {
-            "name": "X_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Y_angel",
-            "type": "int16"
-          },
-          {
-            "name": "Z_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Votage",
-            "type": "uint16"
           }
         ],
+        "endian": "big",
         "verify": "xor",
         "align": 1,
         "header": 123,
         "header_len": 1,
         "footer": 125,
         "footer_len": 1,
-        "data_len": false
-      }
-    },
-    {
-      "name": "CAR_Packet",
-      "path": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples/CAR_Packet.json",
-      "data": {
-        "structName": "CAR_Packet",
-        "fields": [
-          {
-            "name": "STOP_FLAG",
-            "type": "uint8"
-          },
-          {
-            "name": "VX",
-            "type": "int16"
-          },
-          {
-            "name": "VY",
-            "type": "int16"
-          },
-          {
-            "name": "VZ",
-            "type": "int16"
-          },
-          {
-            "name": "XA",
-            "type": "int16"
-          },
-          {
-            "name": "YA",
-            "type": "int16"
-          },
-          {
-            "name": "ZA",
-            "type": "int16"
-          },
-          {
-            "name": "X_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Y_angel",
-            "type": "int16"
-          },
-          {
-            "name": "Z_angle",
-            "type": "int16"
-          },
-          {
-            "name": "Votage",
-            "type": "uint16"
-          }
-        ],
-        "verify": "xor",
-        "align": 1,
-        "header": 123,
-        "header_len": 1,
-        "footer": 125,
-        "footer_len": 1,
-        "data_len": false
+        "data_len": false,
+        "data_len_mode": "full_frame",
+        "data_len_include_header": false,
+        "data_len_include_footer": false,
+        "data_len_include_checksum": false,
+        "checksum_range": "full_frame"
       }
     }
   ],
-  "debug_protocols_loaded": []
+  "debug_protocols_loaded": [],
+  "last_struct_config": "E:/race_save/RoboMaste/rm_vision_cyy/uart_all_in_one/project_files/examples/CAR_Packet_1.json"
 }

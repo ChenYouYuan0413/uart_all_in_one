@@ -99,9 +99,14 @@ class TerminalWindow(QWidget):
         # 设置主布局
         self.setLayout(v)
 
-    def apply_theme(self):
+    def apply_theme(self, theme_name=None):
         """应用主题样式"""
-        theme = get_theme_from_parent(self.parent_window, 'dark')
+        if theme_name and '亮' in theme_name:
+            theme = 'light'
+        elif theme_name and '暗' in theme_name:
+            theme = 'dark'
+        else:
+            theme = get_theme_from_parent(self.parent_window, 'dark')
         apply_theme_to_widget(self, theme)
 
     def clear_terminal(self):

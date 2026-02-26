@@ -91,9 +91,14 @@ class ProtocolWindow(QWidget):
         # 设置主布局
         self.setLayout(v)
 
-    def apply_theme(self):
+    def apply_theme(self, theme_name=None):
         """应用主题样式"""
-        theme = get_theme_from_parent(self.parent_window, 'dark')
+        if theme_name and '亮' in theme_name:
+            theme = 'light'
+        elif theme_name and '暗' in theme_name:
+            theme = 'dark'
+        else:
+            theme = get_theme_from_parent(self.parent_window, 'dark')
         apply_theme_to_widget(self, theme)
 
     def load_protocol(self):
@@ -231,7 +236,11 @@ class ProtocolWindow(QWidget):
         # 使用父窗口的解码函数解析
         if self.parent_window and hasattr(self.parent_window, '_decode_packet'):
             try:
-                result = self.parent_window._decode_packet(data, self.current_protocol_data)
+                # 获取当前字节序设置
+                endian = 'little'
+                if self.parent_window and hasattr(self.parent_window, 'get_current_endian'):
+                    endian = self.parent_window.get_current_endian()
+                result = self.parent_window._decode_packet(data, self.current_protocol_data, endian)
                 self._display_result(result)
             except Exception as e:
                 QMessageBox.warning(self, '解析错误', f'解析失败: {e}')
@@ -243,6 +252,7 @@ class ProtocolWindow(QWidget):
         self.result_table.setRowCount(0)
 
         if not result:
+            QMessageBox.warning(self, '解析失败', '未能解析数据，请检查：\n1. 协议是否正确加载\n2. 字节序是否匹配\n3. 数据格式是否正确')
             return
 
         for field_name, value in result.items():

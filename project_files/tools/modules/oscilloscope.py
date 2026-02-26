@@ -83,6 +83,19 @@ class OscilloWindow(QWidget):
         self.btn_export.clicked.connect(self.export_data)
         ctrl_h.addWidget(self.btn_export)
 
+        # 暂停/继续按钮
+        self.btn_pause = QPushButton('暂停')
+        self.btn_pause.setCheckable(True)
+        self.btn_pause.setChecked(False)
+        self.btn_pause.clicked.connect(self.on_pause_clicked)
+        ctrl_h.addWidget(self.btn_pause)
+
+        # 自适应窗口复选框
+        self.chk_adaptive = QCheckBox('自适应窗口')
+        self.chk_adaptive.setChecked(True)
+        self.chk_adaptive.stateChanged.connect(self.on_adaptive_changed)
+        ctrl_h.addWidget(self.chk_adaptive)
+
         ctrl_h.addStretch()
 
         # 显示模式选择
@@ -94,19 +107,21 @@ class OscilloWindow(QWidget):
 
         v.addLayout(ctrl_h)
 
-        # 变量选择表格（解析模式时显示）- 包含复选框、变量名和倍率
+        # 变量选择表格（解析模式时显示）- 包含复选框、变量名、类型转换、倍率和颜色
         self.var_table = QTableWidget()
-        self.var_table.setColumnCount(4)
-        self.var_table.setHorizontalHeaderLabels(['✓', '变量名', '倍率', '颜色'])
+        self.var_table.setColumnCount(5)
+        self.var_table.setHorizontalHeaderLabels(['✓', '变量名', '类型转换', '倍率', '颜色'])
         # 允许拖动调整列宽 - 所有列都可交互
         self.var_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
         self.var_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
         self.var_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
         self.var_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
+        self.var_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
         self.var_table.setColumnWidth(0, 30)
-        self.var_table.setColumnWidth(1, 150)
-        self.var_table.setColumnWidth(2, 80)
-        self.var_table.setColumnWidth(3, 50)
+        self.var_table.setColumnWidth(1, 120)
+        self.var_table.setColumnWidth(2, 100)
+        self.var_table.setColumnWidth(3, 60)
+        self.var_table.setColumnWidth(4, 50)
         # 允许拖动调整列宽
         self.var_table.horizontalHeader().setDragEnabled(True)
         self.var_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -116,6 +131,7 @@ class OscilloWindow(QWidget):
         self.var_table.itemChanged.connect(self.on_var_table_changed)
         self.var_table.itemSelectionChanged.connect(self.on_var_selection_changed)
         self.var_multiplier_inputs = {}  # 存储每个变量的倍率输入框 {var_name: QLineEdit}
+        self.var_type_converts = {}  # 存储每个变量的类型转换 {var_name: QComboBox}
         self.var_colors = {}  # 存储变量名对应的固定颜色
 
         var_table_wrapper = QWidget()
@@ -140,9 +156,33 @@ class OscilloWindow(QWidget):
             self.ax.grid(True)
             v.addWidget(self.canvas)
 
+            # 启用鼠标跟踪
+            self.canvas.setMouseTracking(True)
+
+            # 鼠标位置数值显示标签
+            self.lbl_cursor_value = QLabel('鼠标位置: --')
+            self.lbl_cursor_value.setStyleSheet('color: #aaa; padding: 5px; background: #2d2d2d;')
+            v.addWidget(self.lbl_cursor_value)
+
+            # 保存上一次鼠标位置
+            self.last_cursor_x = None
+            self.last_cursor_y = None
+
             # 绑定鼠标滚轮事件用于缩放
             self.canvas.mpl_scroll_event = None
             self.canvas.mpl_connect('scroll_event', self.on_mouse_scroll)
+
+            # 绑定鼠标拖拽事件用于平移
+            self.canvas.mpl_connect('button_press_event', self.on_mouse_press)
+            self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
+            self.canvas.mpl_connect('button_release_event', self.on_mouse_release)
+
+            # 拖拽状态
+            self.dragging = False
+            self.drag_start_x = None
+            self.drag_start_y = None
+            self.drag_start_xlim = None
+            self.drag_start_ylim = None
         else:
             self.figure = None
             self.canvas = None
@@ -151,6 +191,10 @@ class OscilloWindow(QWidget):
 
         # 数据存储
         self.enabled = True
+        self.is_paused = False  # 暂停状态
+        self.paused_raw_data = None  # 暂停时的数据备份
+        self.paused_parsed_data = None  # 暂停时的解析数据备份
+        self.adaptive_window = True  # 自适应窗口
         self.max_points = 100
         self.raw_data = deque(maxlen=self.max_points)
         self.parsed_data = {}  # {var_name: deque(maxlen=max_points)}
@@ -190,9 +234,149 @@ class OscilloWindow(QWidget):
         self.ax.set_xlim([x_center - new_x_range / 2, x_center + new_x_range / 2])
         self.canvas.draw_idle()
 
-    def apply_theme(self):
+    def on_pause_clicked(self, checked):
+        """暂停/继续按钮点击"""
+        self.is_paused = checked
+        if checked:
+            self.btn_pause.setText('继续')
+            # 暂停时备份当前数据
+            self.paused_raw_data = list(self.raw_data)
+            self.paused_parsed_data = {k: list(v) for k, v in self.parsed_data.items()}
+        else:
+            self.btn_pause.setText('暂停')
+            # 继续时清除备份
+            self.paused_raw_data = None
+            self.paused_parsed_data = None
+
+    def on_adaptive_changed(self, state):
+        """自适应窗口复选框改变"""
+        self.adaptive_window = (state == Qt.Checked)
+
+    def on_mouse_press(self, event):
+        """鼠标按下事件"""
+        if event.inaxes != self.ax:
+            return
+        # 只有在非自适应模式或暂停状态下才能拖拽
+        if not self.adaptive_window or self.is_paused:
+            self.dragging = True
+            self.drag_start_x = event.xdata
+            self.drag_start_y = event.ydata
+            self.drag_start_xlim = self.ax.get_xlim()
+            self.drag_start_ylim = self.ax.get_ylim()
+
+    def on_mouse_move(self, event):
+        """鼠标移动事件 - 拖拽平移 + 显示数值"""
+        # 如果正在拖拽且在图表内，执行平移
+        if self.dragging and event.inaxes == self.ax:
+            if self.drag_start_x is not None and self.drag_start_y is not None:
+                # 计算移动距离
+                dx = self.drag_start_x - event.xdata
+                dy = self.drag_start_y - event.ydata
+
+                # 检查是否已经初始化了拖拽起点
+                if self.drag_start_xlim is None or self.drag_start_ylim is None:
+                    return
+
+                # 计算新的轴范围
+                new_xlim = [
+                    self.drag_start_xlim[0] + dx,
+                    self.drag_start_xlim[1] + dx
+                ]
+                new_ylim = [
+                    self.drag_start_ylim[0] + dy,
+                    self.drag_start_ylim[1] + dy
+                ]
+
+                self.ax.set_xlim(new_xlim)
+                self.ax.set_ylim(new_ylim)
+                self.canvas.draw_idle()
+
+        # 如果不在图表区域内，清空显示
+        if event.inaxes != self.ax:
+            self.lbl_cursor_value.setText('鼠标位置: --')
+            self.last_cursor_x = None
+            self.last_cursor_y = None
+            return
+
+        # 暂停时也允许鼠标移动查看数值
+        # 保存鼠标位置并显示数值
+        self.last_cursor_x = event.xdata
+        self.last_cursor_y = event.ydata
+        self.update_cursor_value(event)
+
+    def on_mouse_release(self, event):
+        """鼠标释放事件"""
+        self.dragging = False
+        self.drag_start_x = None
+        self.drag_start_y = None
+        self.drag_start_xlim = None
+        self.drag_start_ylim = None
+
+    def update_cursor_value(self, event):
+        """更新鼠标位置显示的数值"""
+        if event.xdata is None or event.ydata is None:
+            self.lbl_cursor_value.setText('鼠标位置: --')
+            return
+
+        x_idx = int(round(event.xdata))
+
+        # 暂停时使用备份的数据
+        if self.is_paused and self.paused_raw_data is not None:
+            raw_data = self.paused_raw_data
+            parsed_data = self.paused_parsed_data
+        else:
+            raw_data = self.raw_data
+            parsed_data = self.parsed_data
+
+        mode = self.display_mode_cb.currentText()
+
+        if mode == '原始数据':
+            if 0 <= x_idx < len(raw_data):
+                value = raw_data[x_idx]
+                self.lbl_cursor_value.setText(f'X: {x_idx}, 值: {value}')
+            else:
+                self.lbl_cursor_value.setText(f'X: {x_idx}, 值: --')
+        else:
+            value_parts = [f'X: {x_idx}']
+            has_values = False
+
+            for row in range(self.var_table.rowCount()):
+                item = self.var_table.item(row, 0)
+                if not item or item.checkState() != Qt.Checked:
+                    continue
+
+                name_item = self.var_table.item(row, 1)
+                if not name_item:
+                    continue
+                var_name = name_item.text()
+
+                type_cb = self.var_type_converts.get(var_name)
+                type_convert = type_cb.currentText() if type_cb else '无'
+
+                multiplier_edit = self.var_multiplier_inputs.get(var_name)
+                multiplier = float(multiplier_edit.text()) if multiplier_edit else 1.0
+
+                if var_name in parsed_data and parsed_data[var_name]:
+                    var_data = parsed_data[var_name]
+                    if 0 <= x_idx < len(var_data):
+                        raw_value = var_data[x_idx]
+                        display_value = self.apply_type_convert(raw_value * multiplier, type_convert)
+                        value_parts.append(f'{var_name}: {display_value}')
+                        has_values = True
+
+            if has_values:
+                self.lbl_cursor_value.setText(' | '.join(value_parts))
+            else:
+                self.lbl_cursor_value.setText(f'X: {x_idx}, 值: --')
+
+    def apply_theme(self, theme_name=None):
         """应用主题样式"""
-        theme = get_theme_from_parent(self.parent_window, 'dark')
+        if theme_name and '亮' in theme_name:
+            theme = 'light'
+        elif theme_name and '暗' in theme_name:
+            theme = 'dark'
+        else:
+            theme = get_theme_from_parent(self.parent_window, 'dark')
         apply_theme_to_widget(self, theme, self.figure, self.ax)
 
     def on_enable_changed(self, state):
@@ -228,8 +412,23 @@ class OscilloWindow(QWidget):
             QMessageBox.warning(self, '警告', '没有数据可导出')
             return
 
+        # 获取默认导出路径（同级目录下的datas文件夹）
+        import sys
+        if getattr(sys, 'frozen', False):
+            # 打包后使用exe所在目录
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # 开发环境使用当前目录
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        datas_dir = os.path.join(base_dir, 'datas')
+        if not os.path.exists(datas_dir):
+            os.makedirs(datas_dir, exist_ok=True)
+
+        default_file = os.path.join(datas_dir, 'oscilloscope_data.csv')
+
         file_path, _ = QFileDialog.getSaveFileName(
-            self, '导出数据', '', 'CSV文件 (*.csv);;所有文件 (*)')
+            self, '导出数据', default_file, 'CSV文件 (*.csv);;所有文件 (*)')
         if not file_path:
             return
 
@@ -319,13 +518,27 @@ class OscilloWindow(QWidget):
         if not self.enabled or not self.ax or not self.canvas:
             return
 
+        # 暂停时不更新图表
+        if self.is_paused:
+            return
+
         mode = self.display_mode_cb.currentText()
 
         try:
+            # 保存当前坐标范围（非自适应模式时需要保持）
+            if not self.adaptive_window:
+                xlim = self.ax.get_xlim()
+                ylim = self.ax.get_ylim()
+
             self.ax.clear()
             self.ax.set_xlabel('Sample')
             self.ax.set_ylabel('Value')
             self.ax.grid(True)
+
+            # 非自适应模式，恢复坐标范围
+            if not self.adaptive_window:
+                self.ax.set_xlim(xlim)
+                self.ax.set_ylim(ylim)
 
             if mode == '原始数据':
                 # 原始数据模式
@@ -349,6 +562,14 @@ class OscilloWindow(QWidget):
                     if not name_item:
                         continue
                     var_name = name_item.text()
+
+                    # 获取类型转换
+                    type_cb = self.var_type_converts.get(var_name)
+                    type_convert = '无'
+                    if type_cb:
+                        type_convert = type_cb.currentText()
+
+                    # 获取倍率
                     multiplier_edit = self.var_multiplier_inputs.get(var_name)
                     multiplier = 1.0
                     if multiplier_edit:
@@ -359,7 +580,8 @@ class OscilloWindow(QWidget):
 
                     if var_name in self.parsed_data and self.parsed_data[var_name]:
                         x = list(range(len(self.parsed_data[var_name])))
-                        y = [v * multiplier for v in self.parsed_data[var_name]]
+                        # 先应用倍率，再应用类型转换
+                        y = [self.apply_type_convert(v * multiplier, type_convert) for v in self.parsed_data[var_name]]
 
                         # 获取固定颜色
                         color = self.var_colors.get(var_name, '#00ff00')
@@ -368,13 +590,26 @@ class OscilloWindow(QWidget):
                         handles.append(line)
 
                         display_name = var_name
+                        if type_convert != '无':
+                            display_name += f' ({type_convert})'
                         if multiplier != 1:
-                            display_name += f' (×{multiplier})'
+                            display_name += f' ×{multiplier}'
                         legend_labels.append(display_name)
 
                 if handles:
                     self.ax.legend(handles, legend_labels, loc='upper right', fontsize=8)
             self.canvas.draw_idle()
+
+            # 数据更新时也更新数值显示
+            if self.last_cursor_x is not None:
+                class MockEvent:
+                    def __init__(self, xdata, ydata, inaxes):
+                        self.xdata = xdata
+                        self.ydata = ydata
+                        self.inaxes = inaxes
+
+                mock_event = MockEvent(self.last_cursor_x, self.last_cursor_y, self.ax)
+                self.update_cursor_value(mock_event)
         except:
             pass
 
@@ -462,12 +697,21 @@ class OscilloWindow(QWidget):
         name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
         self.var_table.setItem(row, 1, name_item)
 
+        # 类型转换下拉框
+        type_cb = QComboBox()
+        type_cb.setStyleSheet('background-color: #3c3c3c; color: #d4d4d4; border: 1px solid #555;')
+        type_cb.addItems(['无', 'uint16→float', 'int16→float', 'uint32→float', 'int32→float', 'uint8→int', 'uint16→int', 'int16→int', 'byte_swap_16', 'byte_swap_32'])
+        type_cb.setFixedWidth(90)
+        type_cb.currentTextChanged.connect(partial(self._on_type_convert_changed, var_name))
+        self.var_table.setCellWidget(row, 2, type_cb)
+        self.var_type_converts[var_name] = type_cb
+
         # 倍率输入
         multiplier_edit = QLineEdit('1.0')
-        multiplier_edit.setFixedWidth(60)
+        multiplier_edit.setFixedWidth(50)
         multiplier_edit.setStyleSheet('background-color: #3c3c3c; color: #d4d4d4; border: 1px solid #555;')
         multiplier_edit.textChanged.connect(partial(self._on_multiplier_changed, var_name))
-        self.var_table.setCellWidget(row, 2, multiplier_edit)
+        self.var_table.setCellWidget(row, 3, multiplier_edit)
         self.var_multiplier_inputs[var_name] = multiplier_edit
 
         # 颜色预览
@@ -475,17 +719,104 @@ class OscilloWindow(QWidget):
         color_item = QTableWidgetItem(color)
         color_item.setBackground(QColor(color))
         color_item.setFlags(color_item.flags() & ~Qt.ItemIsEditable)
-        self.var_table.setItem(row, 3, color_item)
+        self.var_table.setItem(row, 4, color_item)
 
     def _on_multiplier_changed(self, var_name, text):
         """倍率改变时更新图表"""
         self.update_plot()
+
+    def _on_type_convert_changed(self, var_name, text):
+        """类型转换改变时更新图表"""
+        self.update_plot()
+
+    def apply_type_convert(self, value, convert_type):
+        """应用类型转换"""
+        try:
+            # 如果值是字符串，尝试转换为数字
+            if isinstance(value, str):
+                try:
+                    # 尝试解析 JSON 格式的数值（如 {"field": 123}）
+                    import json
+                    try:
+                        parsed = json.loads(value)
+                        if isinstance(parsed, dict):
+                            # 如果是单个值的字典，取第一个值
+                            if parsed:
+                                value = list(parsed.values())[0]
+                            else:
+                                value = 0
+                        else:
+                            value = parsed
+                    except:
+                        # 尝试直接转换为数字
+                        value = float(value) if '.' in value else int(value)
+                except:
+                    return value
+
+            if convert_type == '无' or not convert_type:
+                return value
+
+            # 确保值是数字类型
+            try:
+                val = int(value) if isinstance(value, (int, float)) else 0
+            except:
+                return value
+
+            if convert_type == 'uint16→float':
+                # uint16 简单转换为 float（处理有符号转无符号）
+                if val < 0:
+                    val = val + 65536  # 有符号转无符号
+                return float(val)
+            elif convert_type == 'int16→float':
+                # int16 有符号转换为 float
+                if val > 32767:
+                    val = val - 65536
+                return float(val)
+            elif convert_type == 'uint32→float':
+                # uint32 简单转换为 float
+                if val < 0:
+                    val = val + 4294967296
+                return float(val)
+            elif convert_type == 'int32→float':
+                # int32 有符号转换为 float
+                if val > 2147483647:
+                    val = val - 4294967296
+                return float(val)
+            elif convert_type == 'uint8→int':
+                return val & 0xFF
+            elif convert_type == 'uint16→int':
+                if val < 0:
+                    val = val + 65536
+                return val
+            elif convert_type == 'int16→int':
+                # 转为有符号int16
+                if val > 32767:
+                    val = val - 65536
+                return val
+            elif convert_type == 'byte_swap_16':
+                # 字节交换 (16位)
+                high = (val >> 8) & 0xFF
+                low = val & 0xFF
+                return (low << 8) | high
+            elif convert_type == 'byte_swap_32':
+                # 字节交换 (32位)
+                b1 = (val >> 24) & 0xFF
+                b2 = (val >> 16) & 0xFF
+                b3 = (val >> 8) & 0xFF
+                b4 = val & 0xFF
+                return (b4 << 24) | (b3 << 16) | (b2 << 8) | b1
+            else:
+                return value
+        except Exception as e:
+            log.warning(f'类型转换失败: {e}, value={value}, type={type(value)}')
+            return value
 
     def set_data_from_protocol(self, protocol_data):
         """从协议解析设置变量列表"""
         # 清空表格
         self.var_table.setRowCount(0)
         self.var_multiplier_inputs.clear()
+        self.var_type_converts.clear()
         self.var_colors.clear()
 
         if not protocol_data:

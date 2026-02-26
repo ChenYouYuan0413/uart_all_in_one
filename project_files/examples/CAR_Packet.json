@@ -46,6 +46,7 @@
       "type": "uint16"
     }
   ],
+  "endian": "big",
   "verify": "xor",
   "align": 1,
   "header": 123,
