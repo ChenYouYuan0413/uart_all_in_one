@@ -1,0 +1,54 @@
+{
+  "structName": "SHAOBING",
+  "fields": [
+    {
+      "name": "ID",
+      "type": "uint8"
+    },
+    {
+      "name": "DATA_LEN",
+      "type": "uint8"
+    },
+    {
+      "name": "BIG_YAW",
+      "type": "float"
+    },
+    {
+      "name": "PITCH",
+      "type": "float"
+    },
+    {
+      "name": "YAW",
+      "type": "float"
+    },
+    {
+      "name": "VX",
+      "type": "float"
+    },
+    {
+      "name": "VY",
+      "type": "float"
+    },
+    {
+      "name": "WZ",
+      "type": "float"
+    },
+    {
+      "name": "OFFYAW",
+      "type": "float"
+    }
+  ],
+  "endian": "little",
+  "verify": "none",
+  "align": 1,
+  "header": 90,
+  "header_len": 1,
+  "footer": 65531,
+  "footer_len": 2,
+  "data_len": false,
+  "data_len_mode": "data_only",
+  "data_len_include_header": false,
+  "data_len_include_footer": false,
+  "data_len_include_checksum": false,
+  "checksum_range": "data_only"
+}
